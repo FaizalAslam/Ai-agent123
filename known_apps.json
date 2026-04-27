@@ -1,0 +1,18 @@
+{
+  "vscode": {
+    "path": "C:\\Users\\faiza\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "type": "exe"
+  },
+  "chrome music": {
+    "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "type": "exe"
+  },
+  "file \"c:\\users\\bhavy\\onedrive\\desktop\\word_testdocx\"": {
+    "path": "C:/Program Files/Microsoft Office/root/Office16/WINWORD.EXE",
+    "type": "exe"
+  },
+  "create new word file named hello": {
+    "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+    "type": "exe"
+  }
+}
