@@ -15,11 +15,24 @@ from modules import system_core, ui, config
 # ---- Office Agent (Project 2) --------------------------------------------
 from utils.command_buffer import CommandBuffer
 from utils import command_map
-from utils.office_actions import OfficeActionError, normalize_actions, validate_actions
+from utils.app_alias_guard import validate_manual_app_alias
+from utils.file_paths import (
+    FilePathError,
+    OFFICE_EXTENSIONS,
+    OFFICE_OUTPUT_ROOT,
+    generate_office_output_path,
+    named_output_path,
+    next_available_path,
+    resolve_existing_office_path,
+    resolve_path_value,
+    sanitize_filename,
+)
+from utils.office_actions import OfficeActionError, validate_actions
 from executor.excel_executor import ExcelExecutor
 from executor.word_executor import WordExecutor
 from executor.ppt_executor import PowerPointExecutor
 from parser.command_parser import parse_command
+from parser.command_planner import plan_office_command, split_command_clauses
 from ai.openai_handler import OpenAIHandler
 from listener.keyboard_listener import KeyboardListener
 from listener.clipboard_listener import ClipboardListener
@@ -92,24 +105,12 @@ last_ocr = {"text": "", "pending": False}
 # ---- Office Agent setup ---------------------------------------------------
 OFFICE_APPS = {"excel", "word", "powerpoint", "ppt"}
 BASE_DIR = Path(__file__).resolve().parent
-OFFICE_OUTPUT_DIR = BASE_DIR / "outputs"
-OFFICE_EXTENSIONS = {
-    "excel": "xlsx",
-    "word": "docx",
-    "powerpoint": "pptx",
-    "ppt": "pptx",
-}
-OFFICE_OUTPUT_PREFIXES = {
-    "excel": "excel_output",
-    "word": "word_output",
-    "powerpoint": "powerpoint_output",
-    "ppt": "powerpoint_output",
-}
+OFFICE_OUTPUT_DIR = OFFICE_OUTPUT_ROOT
 OFFICE_OUTPUTS = {
-    "excel": str(OFFICE_OUTPUT_DIR / "output.xlsx"),
-    "word": str(OFFICE_OUTPUT_DIR / "output.docx"),
-    "powerpoint": str(OFFICE_OUTPUT_DIR / "output.pptx"),
-    "ppt": str(OFFICE_OUTPUT_DIR / "output.pptx"),
+    "excel": str(OFFICE_OUTPUT_DIR / "excel" / "output.xlsx"),
+    "word": str(OFFICE_OUTPUT_DIR / "word" / "output.docx"),
+    "powerpoint": str(OFFICE_OUTPUT_DIR / "powerpoint" / "output.pptx"),
+    "ppt": str(OFFICE_OUTPUT_DIR / "powerpoint" / "output.pptx"),
 }
 OFFICE_DEPENDENCIES = {
     "excel": ("openpyxl", "openpyxl"),
@@ -119,21 +120,22 @@ OFFICE_DEPENDENCIES = {
 }
 OFFICE_TARGET_KEYWORDS = {
     "excel": (
-        "excel", "spreadsheet", "workbook", "worksheet", "sheet", "xlsx"
+        "excel", "spreadsheet", "workbook", "worksheet", "sheet", "xlsx", "xlsm", "xls", "csv"
     ),
     "word": (
-        "word", "document", "docx"
+        "word", "document", "docx", "doc"
     ),
     "powerpoint": (
-        "powerpoint", "power point", "ppt", "pptx", "presentation",
-        "slide deck", "slides", "slide"
+        "powerpoint", "power point", "ppt", "pptx", "ppt", "presentation",
+        "slide deck", "slides", "slide", "deck"
     ),
 }
 OFFICE_ACTION_KEYWORDS = (
-    "create", "make", "generate", "build", "new", "add", "insert", "edit",
-    "update", "modify", "write", "format", "table", "chart", "row", "column",
+    "create", "make", "generate", "build", "new", "open", "save as", "add",
+    "insert", "edit", "update", "modify", "write", "format", "table", "chart", "row", "column",
     "cell", "slide", "paragraph", "heading", "workbook", "worksheet",
-    "spreadsheet", "document", "presentation"
+    "spreadsheet", "document", "presentation", "bold", "italic", "color",
+    "underline", "background", "border", "formula", "bullet", "title", "save", "close", "deck"
 )
 APP_LAUNCH_PREFIXES = ("open ", "launch ", "start ", "run ", "boot ")
 _cmd_buf = CommandBuffer()
@@ -193,6 +195,15 @@ def _detect_office_intent(raw_text):
     if not text:
         return {"is_office": False, "reason": "empty command"}
 
+    if re.match(r"^close\s+(?:the\s+)?(?:current\s+)?(?:document|file)\b", text):
+        return {
+            "is_office": True,
+            "app_type": "word",
+            "command": original,
+            "action_type": "edit",
+            "reason": "document lifecycle close command",
+        }
+
     app_type = None
     matched_term = ""
     for candidate, terms in OFFICE_TARGET_KEYWORDS.items():
@@ -206,6 +217,19 @@ def _detect_office_intent(raw_text):
 
     if not app_type:
         return {"is_office": False, "reason": "no office target keyword"}
+
+    if text.startswith("close "):
+        document_close_terms = (
+            "file", "workbook", "worksheet", "spreadsheet", "document", "docx",
+            "doc", "xlsx", "xlsm", "xls", "csv", "pptx", "ppt", "presentation",
+            "slide deck", "deck", "slides"
+        )
+        if not any(_contains_term(text, term) for term in document_close_terms):
+            return {
+                "is_office": False,
+                "app_type": app_type,
+                "reason": f"office application close request for '{matched_term}'",
+            }
 
     has_action_term = any(_contains_term(text, term) for term in OFFICE_ACTION_KEYWORDS)
     has_open_doc_term = (
@@ -242,18 +266,7 @@ def _is_known_office_app(app_name):
 
 def _resolve_actions(app_name, command_text):
     def _estimate_subcommands(text):
-        protected = re.sub(
-            r"(\d+\s*(?:col|cols|column|columns)\s+)and(\s*\d+\s*(?:row|rows))",
-            r"\1__AND__\2",
-            (text or "").lower().strip()
-        )
-        protected = re.sub(
-            r"(\d+\s*(?:row|rows)\s+)and(\s*\d+\s*(?:col|cols|column|columns))",
-            r"\1__AND__\2",
-            protected
-        )
-        parts = re.split(r"\s+(?:and|then|also|after that|next)\s+", protected)
-        return max(1, len([p for p in parts if p.strip()]))
+        return max(1, len(split_command_clauses(text)))
 
     def _actions_cover_command_intents(app, text, actions):
         low = (text or "").lower()
@@ -267,7 +280,7 @@ def _resolve_actions(app_name, command_text):
 
         checks = []
         if app == "excel":
-            if "background color" in low:
+            if "background" in low:
                 checks.append("set_bg_color" in names)
             if "font color" in low:
                 checks.append("set_font_color" in names)
@@ -298,135 +311,130 @@ def _resolve_actions(app_name, command_text):
     if cached_actions and cache_score == 100:
         cached_count = len([a for a in cached_actions if isinstance(a, dict) and a.get("action")])
         clause_count = _estimate_subcommands(command_text)
-        if cached_count >= clause_count and _actions_cover_command_intents(app_name, command_text, cached_actions):
+        try:
+            validated_cached = validate_actions(app_name, cached_actions, known_actions=_known_office_actions(app_name))
+        except OfficeActionError as exc:
+            logging.info("Ignoring invalid command cache for [%s]: %s", app_name, exc.message)
+            validated_cached = []
+        if (
+            validated_cached
+            and cached_count >= clause_count
+            and _actions_cover_command_intents(app_name, command_text, validated_cached)
+        ):
             logging.info(f"Office cache hit [{app_name}] score={cache_score}: {command_text}")
-            return cache_key or command_text, cached_actions, "command-cache", None
+            return cache_key or command_text, validated_cached, "command-cache", None, None
         logging.info(
             f"Ignoring stale cache for [{app_name}] command (cached={cached_count}, clauses={clause_count}): {command_text}"
         )
 
+    plan = plan_office_command(app_name, command_text)
+    plan_info = plan.to_dict()
+    if plan.actions:
+        if plan.errors and not plan.success:
+            logging.info(
+                "Office planner partial parse: app=%s clauses=%s actions=%s errors=%s",
+                app_name,
+                len(plan.clauses),
+                len(plan.actions),
+                len(plan.errors),
+            )
+        try:
+            actions = validate_actions(app_name, plan.actions, known_actions=_known_office_actions(app_name))
+        except OfficeActionError as exc:
+            return command_text, [], "planner", exc, plan_info
+        if plan.success and not plan.errors:
+            command_map.save_actions(app_name, command_text, actions)
+        return command_text, actions, "planner", None, plan_info
+
     actions = parse_command(app_name, command_text)
     if actions:
         try:
-            actions = normalize_actions(actions)
+            actions = validate_actions(app_name, actions, known_actions=_known_office_actions(app_name))
         except OfficeActionError as exc:
-            return command_text, [], "json-parser", exc
-        # If parser returns fewer actions than apparent command clauses,
-        # try API and prefer the richer valid result.
-        clause_count = _estimate_subcommands(command_text)
-        if clause_count > len(actions):
-            ai_actions = _openai_handler.interpret(app_name, command_text)
-            try:
-                normalized_ai = normalize_actions(ai_actions) if ai_actions else []
-            except OfficeActionError as exc:
-                return command_text, [], "openai-fallback", exc
-            if normalized_ai:
-                if len(normalized_ai) >= len(actions):
-                    command_map.save_actions(app_name, command_text, normalized_ai)
-                    return command_text, normalized_ai, "openai-fallback", None
+            return command_text, [], "json-parser", exc, None
         command_map.save_actions(app_name, command_text, actions)
-        return command_text, actions, "json-parser", None
+        return command_text, actions, "json-parser", None, None
 
-    ai_actions = _openai_handler.interpret(app_name, command_text)
-    try:
-        normalized = normalize_actions(ai_actions) if ai_actions else []
-    except OfficeActionError as exc:
-        return command_text, [], "openai-fallback", exc
-    if normalized:
+    ai_result = _openai_handler.interpret_result(app_name, command_text)
+    if ai_result.success:
+        try:
+            normalized = validate_actions(app_name, ai_result.actions, known_actions=_known_office_actions(app_name))
+        except OfficeActionError as exc:
+            return command_text, [], "openai-fallback", exc, None
         command_map.save_actions(app_name, command_text, normalized)
-        return command_text, normalized, "openai-fallback", None
+        return command_text, normalized, "openai-fallback", None, None
 
-    if getattr(_openai_handler, "last_error_code", "") in {"INVALID_OPENAI_JSON", "INVALID_OFFICE_ACTION"}:
+    if ai_result.error_code in {
+        "OPENAI_INVALID_JSON",
+        "OPENAI_INVALID_ACTION_SCHEMA",
+        "OPENAI_UNSUPPORTED_ACTION",
+        "COMMAND_TOO_LONG",
+    }:
         return command_text, [], "openai-fallback", OfficeActionError(
-            getattr(_openai_handler, "last_error_code", "INVALID_OPENAI_JSON"),
-            "OpenAI returned an invalid Office action plan.",
-            getattr(_openai_handler, "last_error", ""),
-        )
+            ai_result.error_code or "OPENAI_REQUEST_FAILED",
+            ai_result.message or "OpenAI fallback could not parse this Office command.",
+            ai_result.raw_response_preview or "",
+        ), None
 
     fallback = _default_create_action(app_name, command_text)
     if fallback:
-        return command_text, [fallback], "office-intent-fallback", None
+        return command_text, [fallback], "office-intent-fallback", None, None
 
-    return command_text, [], "no-match", None
+    if ai_result.error_code:
+        return command_text, [], "openai-fallback", OfficeActionError(
+            ai_result.error_code,
+            ai_result.message or "OpenAI fallback was unavailable.",
+            ai_result.raw_response_preview or "",
+        ), None
+
+    return command_text, [], "no-match", None, None
 
 
 def _extract_named_file_path(command_text, app_name):
     text = (command_text or "").strip()
-    ext = {
-        "excel": "xlsx",
-        "word": "docx",
-        "powerpoint": "pptx",
-        "ppt": "pptx",
-    }.get(app_name)
+    ext = OFFICE_EXTENSIONS.get(app_name)
     if not text or not ext:
         return ""
 
-    def _command_path(raw_name):
-        path = Path((raw_name or "").strip())
-        if path.is_absolute():
-            return str(path.resolve())
-        return str((OFFICE_OUTPUT_DIR / path).resolve())
-
-    def _sanitize_base(name):
-        cleaned = re.sub(r'[<>:"/\\|?*]+', "", (name or "").strip())
+    def _clean_base(name):
+        cleaned = sanitize_filename(name)
         cleaned = re.split(r"\s+(?:and|then|with|in|on)\b", cleaned, maxsplit=1, flags=re.IGNORECASE)[0]
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
         return cleaned
 
     quoted = re.search(r'["\']([^"\']+\.' + re.escape(ext) + r')["\']', text, re.IGNORECASE)
     if quoted:
-        return _command_path(quoted.group(1).strip())
+        return str(resolve_path_value(quoted.group(1).strip(), app_name, for_output=True, base_dir=BASE_DIR))
 
     plain = re.search(r'\b([A-Za-z0-9_\- .]+\.' + re.escape(ext) + r')\b', text, re.IGNORECASE)
     if plain:
-        return _command_path(plain.group(1).strip())
+        return str(resolve_path_value(plain.group(1).strip(), app_name, for_output=True, base_dir=BASE_DIR))
 
     # Support "named demo" or "called demo" without extension.
     named = re.search(r'\b(?:named|called|name)\s*[:=]?\s*["\']?([A-Za-z0-9_\- ]{1,100})["\']?\b', text, re.IGNORECASE)
     if named:
-        base = _sanitize_base(named.group(1))
+        base = _clean_base(named.group(1))
         if base:
-            return _command_path(f"{base}.{ext}")
+            return str(named_output_path(base, app_name))
 
     return ""
 
 
 def _next_available_path(path):
-    base, ext = os.path.splitext(os.path.abspath(path))
-    candidate = f"{base}{ext}"
-    idx = 1
-    while os.path.exists(candidate):
-        candidate = f"{base}_{idx}{ext}"
-        idx += 1
-    return candidate
+    return str(next_available_path(path).resolve())
 
 
 def _generate_new_output_path(app_name):
-    OFFICE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    ext = OFFICE_EXTENSIONS.get(app_name, "xlsx")
-    prefix = OFFICE_OUTPUT_PREFIXES.get(app_name, f"{app_name}_output")
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    millis = int((time.time() * 1000) % 1000)
-    return str((OFFICE_OUTPUT_DIR / f"{prefix}_{stamp}_{millis:03d}.{ext}").resolve())
+    return str(generate_office_output_path(app_name))
 
 
 def _resolve_path_value(value, app_name, for_output=False):
-    raw = str(value or "").strip().strip('"').strip("'")
-    if not raw:
-        return ""
-
-    ext = OFFICE_EXTENSIONS.get(app_name, "")
-    expanded = os.path.expandvars(os.path.expanduser(raw))
-    path = Path(expanded)
-    if ext and not path.suffix and for_output:
-        path = path.with_suffix(f".{ext}")
-    if not path.is_absolute():
-        base = OFFICE_OUTPUT_DIR if for_output and len(path.parts) == 1 else BASE_DIR
-        path = base / path
     try:
-        return str(path.resolve())
-    except OSError:
-        return str(path.absolute())
+        resolved = resolve_path_value(value, app_name, for_output=for_output, base_dir=BASE_DIR)
+    except FilePathError as exc:
+        logging.warning("Office path resolution rejected: %s", exc.message)
+        raise
+    return str(resolved) if resolved else ""
 
 
 def _first_action_path(actions, action_names, path_keys=("path", "file_path", "filename", "output_path")):
@@ -476,23 +484,68 @@ def resolve_office_file_path(request_payload, actions, app_type, mode=None):
         or (request_payload or {}).get("file")
         or ""
     )
-    explicit_path = _resolve_path_value(explicit, app_name, for_output=False) if explicit else ""
+    try:
+        explicit_path = _resolve_path_value(explicit, app_name, for_output=False) if explicit else ""
+    except FilePathError as exc:
+        return {
+            "success": False,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+            "app_type": app_name,
+            "action_type": action_type,
+        }
 
     open_value, open_action = _first_action_path(actions, _open_action_names(app_name))
-    open_path = _resolve_path_value(open_value, app_name, for_output=False) if open_value else ""
+    try:
+        open_path = str(resolve_existing_office_path(
+            open_value,
+            app_name,
+            base_dir=BASE_DIR,
+            command_text=command_text,
+        )) if open_value else ""
+    except FilePathError as exc:
+        return {
+            "success": False,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+            "app_type": app_name,
+            "action_type": action_type,
+        }
 
     save_as_value, save_action = _first_action_path(
         actions,
         _save_as_action_names(app_name),
         path_keys=("filename", "path", "file_path", "output_path"),
     )
-    save_as_path = _resolve_path_value(save_as_value, app_name, for_output=True) if save_as_value else ""
+    try:
+        save_as_path = _resolve_path_value(save_as_value, app_name, for_output=True) if save_as_value else ""
+    except FilePathError as exc:
+        return {
+            "success": False,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+            "app_type": app_name,
+            "action_type": action_type,
+        }
 
-    named = _extract_named_file_path(command_text, app_name)
-    named_path = _resolve_path_value(named, app_name, for_output=True) if named else ""
+    try:
+        named = _extract_named_file_path(command_text, app_name)
+        named_path = _resolve_path_value(named, app_name, for_output=True) if named else ""
+    except FilePathError as exc:
+        return {
+            "success": False,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+            "app_type": app_name,
+            "action_type": action_type,
+        }
     fresh = _is_fresh_file_intent(app_name, command_text, actions)
 
-    source_path = open_path or (explicit_path if explicit_path and not fresh else "")
+    source_path = (explicit_path if explicit_path and not fresh else "") or open_path
     if source_path and not Path(source_path).exists():
         return {
             "success": False,
@@ -503,11 +556,11 @@ def resolve_office_file_path(request_payload, actions, app_type, mode=None):
             "action_type": action_type,
         }
 
-    if save_as_path:
-        output_path = save_as_path
-    elif explicit_path:
+    if explicit_path:
         output_path = explicit_path
-    elif named_path:
+    elif save_as_path:
+        output_path = save_as_path
+    elif named_path and (fresh or not source_path):
         output_path = _next_available_path(named_path) if fresh else named_path
     elif source_path:
         output_path = source_path
@@ -541,8 +594,8 @@ def resolve_office_file_path(request_payload, actions, app_type, mode=None):
         "output_path": str(output.resolve()),
         "reason": (
             "frontend file path" if explicit_path else
-            "open action path" if open_path else
             "save-as action path" if save_as_path else
+            "open action path" if open_path else
             "named path from command" if named_path else
             "generated default output path"
         ),
@@ -608,6 +661,15 @@ def _should_start_fresh(app_name, command_text, actions, file_path):
     if file_path:
         return False
     if _extract_named_file_path(command_text, app_name):
+        return False
+
+    names = _action_names(actions)
+    lifecycle_only = {
+        "save_workbook", "save_workbook_as", "close_workbook",
+        "save_document", "save_document_as", "close_document",
+        "save_presentation", "save_presentation_as", "close_presentation",
+    }
+    if names and names <= lifecycle_only:
         return False
 
     open_actions = {
@@ -728,6 +790,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
     output_path = str(Path((file_path or OFFICE_OUTPUTS.get(app_name, "output.xlsx"))).resolve())
     source_path = str(Path(source_path).resolve()) if source_path else ""
     executed = []
+    results = []
     failures = []
     opened = False
     persisted = False
@@ -749,6 +812,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             "ok_count": 0,
             "total": len(actions or []),
             "executed": executed,
+            "results": results,
             "failures": failures,
             "output_path": output_path,
             "opened": opened,
@@ -767,7 +831,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             setattr(wb, "_path", output_path)
             executor = ExcelExecutor(wb, ws)
 
-            for action in actions or []:
+            for idx, action in enumerate(actions or []):
                 current_wb = getattr(executor, "wb", wb)
                 setattr(current_wb, "_path", output_path)
                 ok = bool(executor.run(action))
@@ -776,8 +840,22 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                 action_name = action.get("action", "unknown")
                 if ok:
                     executed.append(action_name)
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "success",
+                        "target": action.get("range") or action.get("cell") or action.get("start_cell") or "",
+                    })
                 else:
                     failures.append(f"{action_name} failed")
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "failed",
+                        "error_code": "OFFICE_ACTION_FAILED",
+                        "message": f"{action_name} failed",
+                        "target": action.get("range") or action.get("cell") or action.get("start_cell") or "",
+                    })
 
             final_obj = getattr(executor, "wb", wb)
             save_method = final_obj.save
@@ -789,7 +867,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             setattr(doc, "_path", output_path)
             executor = WordExecutor(doc)
 
-            for action in actions or []:
+            for idx, action in enumerate(actions or []):
                 current_doc = getattr(executor, "doc", doc)
                 setattr(current_doc, "_path", output_path)
                 ok = bool(executor.run(action))
@@ -798,8 +876,22 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                 action_name = action.get("action", "unknown")
                 if ok:
                     executed.append(action_name)
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "success",
+                        "target": action.get("target") or action.get("text") or "",
+                    })
                 else:
                     failures.append(f"{action_name} failed")
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "failed",
+                        "error_code": "OFFICE_ACTION_FAILED",
+                        "message": f"{action_name} failed",
+                        "target": action.get("target") or action.get("text") or "",
+                    })
 
             final_obj = getattr(executor, "doc", doc)
             save_method = final_obj.save
@@ -811,7 +903,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             setattr(prs, "_path", output_path)
             executor = PowerPointExecutor(prs)
 
-            for action in actions or []:
+            for idx, action in enumerate(actions or []):
                 current_prs = getattr(executor, "prs", prs)
                 setattr(current_prs, "_path", output_path)
                 ok = bool(executor.run(action))
@@ -820,8 +912,22 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                 action_name = action.get("action", "unknown")
                 if ok:
                     executed.append(action_name)
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "success",
+                        "target": action.get("slide_index") or action.get("target") or "",
+                    })
                 else:
                     failures.append(f"{action_name} failed")
+                    results.append({
+                        "action_index": idx,
+                        "action": action_name,
+                        "status": "failed",
+                        "error_code": "OFFICE_ACTION_FAILED",
+                        "message": f"{action_name} failed",
+                        "target": action.get("slide_index") or action.get("target") or "",
+                    })
 
             final_obj = getattr(executor, "prs", prs)
             save_method = final_obj.save
@@ -833,6 +939,7 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                 "ok_count": len(executed),
                 "total": len(actions or []),
                 "executed": executed,
+                "results": results,
                 "failures": [f"Unsupported app: {app_name}"],
                 "output_path": output_path,
                 "persisted": False,
@@ -880,10 +987,11 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
 
     return {
         "success": success,
-        "error_code": "" if success else "OFFICE_SAVE_FAILED",
+        "error_code": "" if success else ("OFFICE_ACTION_FAILED" if results and any(r.get("status") in {"fail", "failed"} for r in results) else "OFFICE_SAVE_FAILED"),
         "ok_count": len(executed),
         "total": len(actions or []),
         "executed": executed,
+        "results": results,
         "failures": failures,
         "output_path": output_path,
         "persisted": persisted,
@@ -898,7 +1006,7 @@ def _handle_global_command(raw_text):
         if app_name and command:
             if app_name == "ppt":
                 app_name = "powerpoint"
-            cache_key, actions, source, action_error = _resolve_actions(app_name, command)
+            cache_key, actions, source, action_error, plan_info = _resolve_actions(app_name, command)
             if action_error:
                 logging.warning("Global office action parse failed: %s", action_error.message)
                 return
@@ -976,6 +1084,7 @@ def _json_success(message, intent="unknown", **extra):
         "message": message,
     }
     payload.update(extra)
+    payload.setdefault("data", {k: v for k, v in extra.items() if k != "data"})
     return jsonify(payload)
 
 
@@ -988,6 +1097,7 @@ def _json_error(message, intent="unknown", error_code="COMMAND_FAILED", http_sta
         "message": message,
     }
     payload.update(extra)
+    payload.setdefault("data", {k: v for k, v in extra.items() if k != "data"})
     return jsonify(payload), http_status
 
 
@@ -1069,6 +1179,21 @@ def execute():
         path = ui.manual_selector()
         if path:
             norm_app = system_core.normalize_app_name(app_name)
+            alias_ok, alias_code, alias_message = validate_manual_app_alias(norm_app)
+            if not alias_ok:
+                logging.warning(
+                    "Manual executable alias rejected: original=%r normalized=%r code=%s",
+                    raw_cmd,
+                    norm_app,
+                    alias_code,
+                )
+                return _json_error(
+                    alias_message,
+                    intent="app_launch",
+                    error_code=alias_code,
+                    app_type=norm_app,
+                    requires_manual_selection=False,
+                )
             config.save_memory(norm_app, path, is_store_app=False)
             launched = system_core.open_path(path)
             if launched:
@@ -1158,7 +1283,7 @@ def _office_execute_impl(data):
 
     logging.info("Office request: original=%r app=%s", full or command, app_name)
 
-    cache_key, actions, source, action_error = _resolve_actions(app_name, command)
+    cache_key, actions, source, action_error, plan_info = _resolve_actions(app_name, command)
     if action_error:
         logging.warning("Office action parse error: %s", action_error.message)
         return _json_error(
@@ -1168,6 +1293,8 @@ def _office_execute_impl(data):
             app_type=app_name,
             action_type=_detect_action_type(command, actions),
             details=action_error.details,
+            source=source,
+            plan=plan_info,
         )
     if not actions:
         return _json_error(
@@ -1177,6 +1304,7 @@ def _office_execute_impl(data):
             app_type=app_name,
             action_type="unknown",
             source=source,
+            plan=plan_info,
         )
 
     requested_file_path = (data.get("file_path") or data.get("file") or "").strip()
@@ -1194,6 +1322,7 @@ def _office_execute_impl(data):
             action_type=_detect_action_type(command, actions),
             details=exc.details,
             source=source,
+            plan=plan_info,
         )
 
     resolution = resolve_office_file_path(data, actions, app_name, mode=_detect_action_type(command, actions))
@@ -1207,6 +1336,7 @@ def _office_execute_impl(data):
             action_type=resolution.get("action_type", "unknown"),
             details=resolution.get("details", ""),
             source=source,
+            plan=plan_info,
         )
 
     logging.info(
@@ -1234,6 +1364,7 @@ def _office_execute_impl(data):
             app_type=app_name,
             action_type=resolution.get("action_type", "unknown"),
             source=source,
+            plan=plan_info,
             file_path=summary["output_path"],
             output_file=summary["output_path"],
         )
@@ -1241,16 +1372,43 @@ def _office_execute_impl(data):
         command_map.remove_action(app_name, cache_key)
     if summary["failures"]:
         return _json_error(
-            f"Could not save {app_name.title()} file.",
+            "Some Office actions completed, but some failed." if summary.get("ok_count") else f"Could not save {app_name.title()} file.",
             intent="office_automation",
             error_code=summary.get("error_code") or "OFFICE_SAVE_FAILED",
+            status="partial_success" if summary.get("ok_count") else "fail",
             app_type=app_name,
             action_type=resolution.get("action_type", "unknown"),
             details=f"{summary['ok_count']}/{summary['total']} done | {' | '.join(summary['failures'])}",
             source=source,
+            plan=plan_info,
             file_path=summary["output_path"],
             output_file=summary["output_path"],
             persisted=summary.get("persisted", False),
+            results=summary.get("results", []),
+            executed_count=summary.get("ok_count", 0),
+            failed_count=max(0, summary.get("total", 0) - summary.get("ok_count", 0)),
+        )
+
+    if plan_info and plan_info.get("errors"):
+        return _json_error(
+            "Some Office actions completed, but some command clauses could not be parsed.",
+            intent="office_automation",
+            error_code="OFFICE_PARTIAL_PARSE",
+            status="partial_success",
+            app_type=app_name,
+            action_type=resolution.get("action_type", "unknown"),
+            details=" | ".join(plan_info.get("errors") or []),
+            source=source,
+            plan=plan_info,
+            file_path=summary["output_path"],
+            output_file=summary["output_path"],
+            persisted=summary.get("persisted", False),
+            opened=summary.get("opened", False),
+            action_count=summary.get("total", len(actions)),
+            executed=summary.get("executed", []),
+            results=summary.get("results", []),
+            executed_count=summary.get("ok_count", 0),
+            failed_count=len(plan_info.get("failed_clauses") or []),
         )
 
     app_label = {"excel": "Excel", "word": "Word", "powerpoint": "PowerPoint"}.get(app_name, app_name.title())
@@ -1261,11 +1419,13 @@ def _office_execute_impl(data):
         action_type=resolution.get("action_type", "unknown"),
         file_path=summary["output_path"],
         source=source,
+        plan=plan_info,
         output_file=summary["output_path"],
         persisted=summary.get("persisted", False),
         opened=summary.get("opened", False),
         action_count=summary.get("total", len(actions)),
         executed=summary.get("executed", []),
+        results=summary.get("results", []),
     )
 
 

@@ -68,12 +68,12 @@
   "PROTECT_SHEET": {
     "keywords": ["protect sheet", "lock sheet", "password protect sheet", "secure sheet"],
     "action": "protect_sheet",
-    "params": { "password": "{password}" }
+    "params": { "sheet_name": "{sheet_name}", "password": "{password}" }
   },
   "UNPROTECT_SHEET": {
-    "keywords": ["unprotect sheet", "unlock sheet", "remove protection", "remove sheet password"],
+    "keywords": ["unprotect sheet", "unlock sheet", "remove protection", "remove sheet password", "unprotect sheet with password"],
     "action": "unprotect_sheet",
-    "params": { "password": "{password}" }
+    "params": { "sheet_name": "{sheet_name}", "password": "{password}" }
   },
   "PROTECT_WORKBOOK": {
     "keywords": ["protect workbook", "lock workbook", "secure workbook", "password protect workbook"],
@@ -81,7 +81,7 @@
     "params": { "password": "{password}" }
   },
   "UNPROTECT_WORKBOOK": {
-    "keywords": ["unprotect workbook", "unlock workbook", "remove workbook protection"],
+    "keywords": ["unprotect workbook", "unlock workbook", "remove workbook protection", "unprotect workbook with password"],
     "action": "unprotect_workbook",
     "params": { "password": "{password}" }
   },
@@ -183,9 +183,9 @@
     "params": { "cell": "{result_cell}", "formula": "=SUMIF({range},{criteria},{sum_range})" }
   },
   "SUMIFS_FORMULA": {
-    "keywords": ["sumifs", "sum with multiple conditions", "sum if multiple", "multi condition sum"],
+    "keywords": ["sumifs", "sum with multiple conditions", "sum if multiple", "multi condition sum", "sumifs with one or more criteria"],
     "action": "write_formula",
-    "params": { "cell": "{result_cell}", "formula": "=SUMIFS({sum_range},{range1},{criteria1})" }
+    "params": { "cell": "{result_cell}", "formula": "{sumifs_formula}" }
   },
   "AVERAGEIF_FORMULA": {
     "keywords": ["averageif", "average if", "conditional average", "average where", "average matching"],
@@ -235,12 +235,12 @@
   "CONCATENATE_FORMULA": {
     "keywords": ["concatenate", "join text", "combine text", "merge text", "join cells", "combine cells", "text join", "link text"],
     "action": "write_formula",
-    "params": { "cell": "{result_cell}", "formula": "=CONCATENATE({cell1},{cell2})" }
+    "params": { "cell": "{result_cell}", "cell1": "{cell1}", "cell2": "{cell2}", "formula": "=CONCATENATE({cell1},{cell2})" }
   },
   "TEXTJOIN_FORMULA": {
     "keywords": ["textjoin", "text join", "join with separator", "combine with comma", "join with delimiter"],
     "action": "write_formula",
-    "params": { "cell": "{result_cell}", "formula": "=TEXTJOIN(\"{delimiter}\",TRUE,{range})" }
+    "params": { "cell": "{result_cell}", "formula": "=TEXTJOIN({delimiter},TRUE,{range})" }
   },
   "LEFT_FORMULA": {
     "keywords": ["left", "left text", "extract left", "first characters", "leftmost"],
@@ -569,8 +569,13 @@
     "action": "set_number_format",
     "params": { "range": "{range}", "format": "{date_format}" }
   },
-  "FORMAT_TIME": {
-    "keywords": ["time format", "format as time", "show time", "hh:mm", "format time"],
+  "FORMAT_TIME_HH_MM": {
+    "keywords": ["time format hh:mm", "format as time hh:mm", "show time hh:mm", "hh:mm", "format time as hh:mm"],
+    "action": "set_number_format",
+    "params": { "range": "{range}", "format": "hh:mm" }
+  },
+  "FORMAT_TIME_HH_MM_SS": {
+    "keywords": ["time format hh:mm:ss", "format as time hh:mm:ss", "show time hh:mm:ss", "hh:mm:ss", "format time as hh:mm:ss"],
     "action": "set_number_format",
     "params": { "range": "{range}", "format": "hh:mm:ss" }
   },

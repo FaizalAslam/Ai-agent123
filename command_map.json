@@ -221,13 +221,6 @@
         "action": "create_workbook"
       }
     ],
-    "set yellow background on range A1:E1": [
-      {
-        "action": "write_formula",
-        "cell": "E1",
-        "formula": "=ROUND({cell},{decimals})"
-      }
-    ],
     "bold the header row A1:E1": [
       {
         "action": "set_bold",
@@ -597,6 +590,76 @@
         "action": "write_cell",
         "cell": "A1",
         "value": "the title of the columns, name, age, city, country, language"
+      }
+    ],
+    "Create a new Excel file, add a worksheet named \"Sheet1\", create a table with 5 rows and 3 columns starting at cell A1, use headers Name, Amount, and Status, make the header row bold, set the header background color to yellow, and apply borders to the full table. save the file as \"Test_File.xlsx\".": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Sheet1"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1",
+        "bold": true
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "save_workbook"
+      }
+    ],
+    "Create a new Excel file, add a worksheet named \"Sheet1\", create a table with 5 rows and 3 columns starting at cell A1, use headers Name, Amount, and Status, make the header row bold, set the header background color to yellow, and apply borders to the full table. save the file as \"Test_File22.xlsx\".": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Sheet1"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1",
+        "bold": true
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "save_workbook"
+      }
+    ],
+    "open the excel file named Test_File22 from the desktop": [
+      {
+        "action": "open_workbook",
+        "path": "Test_File22 from the desktop"
       }
     ]
   },

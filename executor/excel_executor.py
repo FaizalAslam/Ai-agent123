@@ -5,15 +5,58 @@ import re
 logger = logging.getLogger("OfficeAgent")
 
 
+def _normalize_excel_argb(color):
+    color = str(color or "").strip().lstrip("#").upper()
+    named_colors = {
+        "RED": "FFFF0000",
+        "GREEN": "FF00B050",
+        "BLUE": "FF0070C0",
+        "YELLOW": "FFFFFF00",
+        "ORANGE": "FFFFA500",
+        "PURPLE": "FF7030A0",
+        "PINK": "FFFF69B4",
+        "BLACK": "FF000000",
+        "WHITE": "FFFFFFFF",
+        "GRAY": "FF808080",
+        "GREY": "FF808080",
+        "DARK RED": "FFC00000",
+        "DARK BLUE": "FF00008B",
+        "DARK GREEN": "FF006400",
+        "LIGHT BLUE": "FFADD8E6",
+        "LIGHT GRAY": "FFD3D3D3",
+        "TEAL": "FF008080",
+        "CYAN": "FF00FFFF",
+        "MAGENTA": "FFFF00FF",
+        "GOLD": "FFFFD700",
+        "BROWN": "FFA52A2A",
+        "NAVY": "FF000080",
+    }
+    if color in named_colors:
+        return named_colors[color]
+    if re.fullmatch(r"[0-9A-F]{6}", color):
+        return "FF" + color
+    if re.fullmatch(r"[0-9A-F]{8}", color):
+        return color
+    raise ValueError(f"Invalid Excel color: {color}")
+
+
 def _xl_color(hex_color):
     from openpyxl.styles import Color
-    return Color(rgb=hex_color.lstrip("#").upper().zfill(6))
+    return Color(rgb=_normalize_excel_argb(hex_color))
 
 
 class ExcelExecutor:
     def __init__(self, wb, ws):
         self.wb = wb
         self.ws = ws
+
+    def _sheet_for_action(self, p):
+        sheet_name = str(p.get("sheet_name") or p.get("name") or "").strip()
+        if not sheet_name:
+            return self.ws
+        if sheet_name not in self.wb.sheetnames:
+            raise ValueError(f"Sheet not found: {sheet_name}")
+        return self.wb[sheet_name]
 
     def _iter_cells(self, range_ref):
         ref = (range_ref or "").strip()
@@ -189,9 +232,10 @@ class ExcelExecutor:
 
     def _do_set_bg_color(self, p):
         from openpyxl.styles import PatternFill
+        color = _normalize_excel_argb(p["color"])
         fill = PatternFill(
-            start_color=p["color"],
-            end_color=p["color"],
+            start_color=color,
+            end_color=color,
             fill_type="solid"
         )
         for cell in self._iter_cells(p["range"]):
@@ -331,18 +375,30 @@ class ExcelExecutor:
         self.wb.move_sheet(p.get("name"), offset=int(p.get("position", 0)))
 
     def _do_protect_sheet(self, p):
-        self.ws.protection.sheet    = True
-        self.ws.protection.password = p.get("password", "")
+        ws = self._sheet_for_action(p)
+        password = p.get("password", "")
+        ws.protection.sheet = True
+        if password:
+            ws.protection.set_password(str(password))
+        logger.info("Protected sheet '%s'", ws.title)
 
     def _do_unprotect_sheet(self, p):
-        self.ws.protection.sheet    = False
-        self.ws.protection.password = ""
+        from openpyxl.worksheet.protection import SheetProtection
+        ws = self._sheet_for_action(p)
+        ws.protection = SheetProtection(sheet=False)
+        logger.info("Unprotected sheet '%s'", ws.title)
 
     def _do_protect_workbook(self, p):
-        logger.info("Workbook protection (requires win32com)")
+        password = str(p.get("password") or "")
+        self.wb.security.lockStructure = True
+        if password and hasattr(self.wb.security, "set_workbook_password"):
+            self.wb.security.set_workbook_password(password)
+        logger.info("Workbook structure protected")
 
     def _do_unprotect_workbook(self, p):
-        logger.info("Workbook unprotection (requires win32com)")
+        self.wb.security.lockStructure = False
+        self.wb.security.workbookPassword = ""
+        logger.info("Workbook structure unprotected")
 
     # â”€â”€ Data Tools â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -389,8 +445,8 @@ class ExcelExecutor:
     def _do_add_conditional_formatting(self, p):
         from openpyxl.formatting.rule import ColorScaleRule
         rule = ColorScaleRule(
-            start_type="min", start_color="FF0000",
-            end_type="max",   end_color="00FF00"
+            start_type="min", start_color=_normalize_excel_argb("FF0000"),
+            end_type="max",   end_color=_normalize_excel_argb("00FF00")
         )
         self.ws.conditional_formatting.add(p["range"], rule)
 

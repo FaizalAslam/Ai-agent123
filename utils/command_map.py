@@ -6,7 +6,7 @@ from pathlib import Path
 
 _LOCK = threading.Lock()
 _MAP_FILE = Path("command_map.json")
-FUZZY_THRESHOLD = 85
+FUZZY_THRESHOLD = 100
 
 
 def _read():
@@ -53,9 +53,9 @@ def get_cached_actions(app_name, command_text):
                     return key, actions, 100
                 return None, None, 0
 
-        # Fuzzy match fallback.
-        best_key = None
-        best_actions = None
+        # Do not reuse fuzzy cache hits for command execution. Similar natural
+        # language commands often differ by range, color, file name, or action
+        # count, and stale reuse is worse than reparsing.
         best_score = 0
         for key, actions in app_map.items():
             if not isinstance(actions, list):
@@ -63,11 +63,6 @@ def get_cached_actions(app_name, command_text):
             s = _score(query, key)
             if s > best_score:
                 best_score = s
-                best_key = key
-                best_actions = actions
-
-        if best_score > FUZZY_THRESHOLD and best_actions:
-            return best_key, best_actions, best_score
         return None, None, best_score
 
 
@@ -75,6 +70,10 @@ def save_actions(app_name, command_text, actions):
     app = (app_name or "").strip().lower()
     key = (command_text or "").strip()
     if not app or not key or not isinstance(actions, list):
+        return False
+    if len(key) > 5000:
+        return False
+    if not actions or any(not isinstance(action, dict) or not action.get("action") for action in actions):
         return False
     with _LOCK:
         data = _read()

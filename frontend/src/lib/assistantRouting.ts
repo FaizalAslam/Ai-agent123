@@ -20,9 +20,9 @@ export type AssistantRoute =
     };
 
 const officeTargets = {
-  excel: ["excel", "spreadsheet", "workbook", "worksheet", "sheet", "xlsx"],
-  word: ["word", "document", "docx"],
-  powerpoint: ["powerpoint", "power point", "ppt", "pptx", "presentation", "slide deck", "slides", "slide"]
+  excel: ["excel", "spreadsheet", "workbook", "worksheet", "sheet", "xlsx", "xlsm", "xls", "csv"],
+  word: ["word", "document", "docx", "doc"],
+  powerpoint: ["powerpoint", "power point", "ppt", "pptx", "presentation", "slide deck", "slides", "slide", "deck"]
 } as const;
 
 const actionTerms = [
@@ -31,6 +31,8 @@ const actionTerms = [
   "generate",
   "build",
   "new",
+  "open",
+  "save as",
   "add",
   "insert",
   "edit",
@@ -45,7 +47,19 @@ const actionTerms = [
   "cell",
   "slide",
   "paragraph",
-  "heading"
+  "heading",
+  "bold",
+  "italic",
+  "underline",
+  "color",
+  "background",
+  "border",
+  "formula",
+  "bullet",
+  "title",
+  "save",
+  "close",
+  "deck"
 ];
 
 const launchPrefixes = ["open ", "launch ", "start ", "run ", "boot "];
@@ -69,6 +83,30 @@ export function classifyAssistantCommand(command: string): AssistantRoute {
       raw: prefixMatch[2].trim(),
       command: original,
       reason: "agent prefix"
+    };
+  }
+
+  if (/^close\s+(?:the\s+)?(?:current\s+)?(?:document|file)\b/.test(text)) {
+    return {
+      kind: "office",
+      endpoint: "/office/execute",
+      app: "word",
+      raw: original,
+      command: original,
+      reason: "document lifecycle command"
+    };
+  }
+
+  if (
+    text.startsWith("close ") &&
+    /\b(excel|word|powerpoint|power point|ppt|microsoft word)\b/.test(text) &&
+    !/\b(file|workbook|worksheet|spreadsheet|document|docx|xlsx|pptx|presentation|slides|deck)\b/.test(text)
+  ) {
+    return {
+      kind: "system",
+      endpoint: "/execute",
+      command: original,
+      reason: "app-close command"
     };
   }
 

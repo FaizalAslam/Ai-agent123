@@ -202,6 +202,18 @@ def _split_sub_commands(raw_command):
         protected,
         flags=re.IGNORECASE
     )
+    protected = re.sub(
+        r"([A-Z]{1,3}\d{1,7}\s+)and(\s+[A-Z]{1,3}\d{1,7})",
+        r"\1__AND__\2",
+        protected,
+        flags=re.IGNORECASE
+    )
+    protected = re.sub(
+        r"profit\s+and\s+loss",
+        lambda m: re.sub(r"\s+and\s+", " __AND__ ", m.group(0), flags=re.IGNORECASE),
+        protected,
+        flags=re.IGNORECASE
+    )
 
     # Do not split on commas: commas are commonly used inside value lists
     # (for example: "fill A1:A4 with 2, 3, 4, 5").
@@ -431,6 +443,69 @@ def _parse_excel_structured_actions(raw_command):
             "action": "write_formula",
             "cell": out_cell,
             "formula": f"=SUM({start_ref}:{end_ref})",
+        })
+
+    concat = re.search(
+        r"\bconcatenate\s+([A-Z]{1,3}\d{1,7})\s+and\s+([A-Z]{1,3}\d{1,7})\s+(?:in|into|to)\s+([A-Z]{1,3}\d{1,7})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if concat:
+        actions.append({
+            "action": "write_formula",
+            "cell": concat.group(3).upper(),
+            "formula": f"=CONCATENATE({concat.group(1).upper()},{concat.group(2).upper()})",
+        })
+
+    textjoin = re.search(
+        r"\btext\s*join\b|\btextjoin\b",
+        text,
+        re.IGNORECASE,
+    )
+    if textjoin:
+        rng = _extract_range(text) or "A1:A5"
+        result = _extract_result_cell(text)
+        actions.append({
+            "action": "write_formula",
+            "cell": result,
+            "formula": f"=TEXTJOIN({_excel_delimiter_literal(text)},TRUE,{rng})",
+        })
+
+    if re.search(r"\bsumifs\b|\bsum\s+ifs\b", text, re.IGNORECASE):
+        actions.append({
+            "action": "write_formula",
+            "cell": _extract_result_cell(text),
+            "formula": _extract_sumifs_formula(text),
+        })
+
+    if re.search(r"\b(today|todays date|today's date|current date)\b", low):
+        actions.append({"action": "write_formula", "cell": _extract_result_cell(text), "formula": "=TODAY()"})
+
+    if re.search(r"\b(now|current time|current datetime|timestamp)\b", low):
+        actions.append({"action": "write_formula", "cell": _extract_result_cell(text), "formula": "=NOW()"})
+
+    if "format" in low and "time" in low:
+        actions.append({
+            "action": "set_number_format",
+            "range": _extract_cell(text) or "A1",
+            "format": _extract_number_format(text),
+        })
+
+    if "unprotect workbook" in low or "unlock workbook" in low:
+        actions.append({"action": "unprotect_workbook", "password": _resolve_inline_placeholder("password", text, "excel") or ""})
+    elif "protect workbook" in low:
+        actions.append({"action": "protect_workbook", "password": _resolve_inline_placeholder("password", text, "excel") or ""})
+    if "unprotect sheet" in low or "unlock sheet" in low or "remove sheet password" in low:
+        actions.append({
+            "action": "unprotect_sheet",
+            "sheet_name": _resolve_inline_placeholder("sheet_name", text, "excel") or "",
+            "password": _resolve_inline_placeholder("password", text, "excel") or "",
+        })
+    elif "protect sheet" in low or "lock sheet" in low:
+        actions.append({
+            "action": "protect_sheet",
+            "sheet_name": _resolve_inline_placeholder("sheet_name", text, "excel") or "",
+            "password": _resolve_inline_placeholder("password", text, "excel") or "",
         })
 
     bold_range = re.search(
@@ -758,10 +833,156 @@ def _extract_number_format(text):
             return "MM/DD/YYYY"
         return "DD/MM/YYYY"
     if any(w in text_lower for w in ["time"]):
+        if "hh:mm:ss" in text_lower:
+            return "hh:mm:ss"
+        if "hh:mm" in text_lower:
+            return "hh:mm"
         return "hh:mm:ss"
+    if "hh:mm:ss" in text_lower:
+        return "hh:mm:ss"
+    if "hh:mm" in text_lower:
+        return "hh:mm"
     if any(w in text_lower for w in ["comma", "thousands"]):
         return "#,##0"
     return "General"
+
+
+def _excel_formula_literal(value):
+    raw_value = str(value if value is not None else "")
+    if raw_value == " ":
+        return '" "'
+    raw = raw_value.strip()
+    if not raw:
+        return '""'
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        return '"' + raw[1:-1].replace('"', '""') + '"'
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
+        return raw
+    if raw.startswith((">", "<", "=")):
+        return '"' + raw.replace('"', '""') + '"'
+    return '"' + raw.replace('"', '""') + '"'
+
+
+def _excel_delimiter_literal(text):
+    delimiter = _extract_delimiter(text)
+    if delimiter == "\t":
+        delimiter = "\\t"
+    return _excel_formula_literal(delimiter)
+
+
+def _extract_result_cell(text):
+    cells = re.findall(r'[A-Z]{1,3}[0-9]{1,7}', (text or "").upper())
+    return cells[-1] if cells else "A1"
+
+
+def _extract_cell_by_index(text, index, default="A1"):
+    cells = re.findall(r'[A-Z]{1,3}[0-9]{1,7}', (text or "").upper())
+    return cells[index] if len(cells) > index else default
+
+
+def _extract_sumifs_formula(text):
+    raw = text or ""
+    range_pat = r"(?:[A-Z]{1,3}:[A-Z]{1,3}|[A-Z]{1,3}\d{1,7}:[A-Z]{1,3}\d{1,7})"
+    sum_range = None
+    m = re.search(rf"\bsumifs?\s+({range_pat})", raw, re.IGNORECASE)
+    if not m:
+        m = re.search(rf"\bsum\s+({range_pat})", raw, re.IGNORECASE)
+    if m:
+        sum_range = m.group(1).upper().replace(" ", "")
+    else:
+        ranges = re.findall(range_pat, raw, flags=re.IGNORECASE)
+        sum_range = ranges[0].upper().replace(" ", "") if ranges else "C:C"
+
+    criteria_pairs = []
+    for match in re.finditer(
+        rf"({range_pat})\s*(?:is|=|equals|equal to|matching|for)\s*['\"]?([^,'\"\n]+?)['\"]?(?=\s+(?:and|,|in|into|to)\b|$)",
+        raw,
+        re.IGNORECASE,
+    ):
+        criteria_range = match.group(1).upper().replace(" ", "")
+        if criteria_range == sum_range and not criteria_pairs:
+            continue
+        criteria = match.group(2).strip(" .")
+        if criteria:
+            criteria_pairs.append((criteria_range, criteria))
+
+    if not criteria_pairs:
+        ranges = [r.upper().replace(" ", "") for r in re.findall(range_pat, raw, flags=re.IGNORECASE)]
+        if len(ranges) >= 2:
+            criteria_pairs.append((ranges[1], ""))
+
+    if not criteria_pairs:
+        criteria_pairs.append(("A:A", ""))
+
+    parts = [sum_range]
+    for criteria_range, criteria in criteria_pairs[:5]:
+        parts.extend([criteria_range, _excel_formula_literal(criteria or ">0")])
+    return f"=SUMIFS({','.join(parts)})"
+
+
+def _resolve_inline_placeholder(placeholder, command_text, app):
+    placeholder = (placeholder or "").strip()
+    if placeholder == "range":
+        return _extract_range(command_text) or "A1"
+    if placeholder in ("cell", "target_cell", "dest_cell"):
+        return _extract_cell_by_index(command_text, 0)
+    if placeholder == "result_cell":
+        return _extract_result_cell(command_text)
+    if placeholder == "cell1":
+        return _extract_cell_by_index(command_text, 0)
+    if placeholder == "cell2":
+        return _extract_cell_by_index(command_text, 1, "B1")
+    if placeholder == "delimiter":
+        return _excel_delimiter_literal(command_text)
+    if placeholder == "sumifs_formula":
+        return _extract_sumifs_formula(command_text)
+    if placeholder in ("sum_range", "range1", "range2"):
+        ranges = re.findall(
+            r"(?:[A-Z]{1,3}:[A-Z]{1,3}|[A-Z]{1,3}\d{1,7}:[A-Z]{1,3}\d{1,7})",
+            command_text,
+            flags=re.IGNORECASE,
+        )
+        idx = {"sum_range": 0, "range1": 1, "range2": 2}.get(placeholder, 0)
+        return ranges[idx].upper().replace(" ", "") if len(ranges) > idx else (_extract_range(command_text) or "A1:A10")
+    if placeholder in ("criteria", "criteria1", "criteria2"):
+        criteria = re.findall(r"(?:is|=|equals|matching|for)\s*['\"]?([^,'\"\n]+?)['\"]?(?=\s+(?:and|,|in|into|to)\b|$)", command_text, flags=re.IGNORECASE)
+        idx = 0 if placeholder in ("criteria", "criteria1") else 1
+        return _excel_formula_literal(criteria[idx].strip()) if len(criteria) > idx else '">0"'
+    if placeholder == "formula":
+        return _extract_formula(command_text) or ""
+    if placeholder == "format":
+        return _extract_number_format(command_text)
+    if placeholder == "filename":
+        return _extract_filename(command_text) or "output"
+    if placeholder == "file_path":
+        path_match = re.search(r'["\']([^"\']+\.[a-z]{2,5})["\']', command_text, re.IGNORECASE)
+        if path_match:
+            return path_match.group(1)
+        path_match = re.search(r'([A-Za-z]:[\\/][^"\']+\.[a-z]{2,5}|[^\s"\']+\.[a-z]{2,5})', command_text, re.IGNORECASE)
+        return path_match.group(1) if path_match else ""
+    if placeholder == "password":
+        m = re.search(r'password\s+(?:is\s+)?["\']?([^\s"\']+)["\']?', command_text, re.IGNORECASE)
+        return m.group(1) if m else ""
+    if placeholder == "sheet_name":
+        if re.search(r"\b(?:active|current)\s+sheet\b", command_text, re.IGNORECASE):
+            return ""
+        m = re.search(r'(?:sheet|tab)\s+(?:named|called|name)\s*["\']?([A-Za-z0-9 _-]+?)["\']?(?:\s+with|\s+password|$)', command_text, re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip()
+            if candidate.lower() not in {"active", "current"}:
+                return candidate
+        return ""
+    return None
+
+
+def _interpolate_param_template(template, command_text, app):
+    def repl(match):
+        placeholder = match.group(1)
+        value = _resolve_inline_placeholder(placeholder, command_text, app)
+        if value is None:
+            return match.group(0)
+        return str(value)
+    return re.sub(r"\{([^{}]+)\}", repl, template)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -813,6 +1034,17 @@ def _find_matching_commands(app, command_text):
 def _resolve_params(params, command_text, app):
     resolved = {}
     for key, val in params.items():
+        if isinstance(val, str) and re.search(r"\{[^{}]+\}", val):
+            full = re.fullmatch(r"\{([^{}]+)\}", val.strip())
+            if full:
+                inline_value = _resolve_inline_placeholder(full.group(1), command_text, app)
+                if inline_value is not None:
+                    resolved[key] = inline_value
+                    continue
+            elif "{" in val and "}" in val:
+                resolved[key] = _interpolate_param_template(val, command_text, app)
+                continue
+
         if not isinstance(val, str) or not val.startswith("{"):
             resolved[key] = val
             continue
@@ -1256,7 +1488,7 @@ def parse_command(app, raw_command):
 
     if app == "excel":
         structured_actions = _parse_excel_structured_actions(raw_command)
-        if len(structured_actions) >= 2:
+        if structured_actions:
             logger.info(f"Structured excel parse hit ({len(structured_actions)} actions)")
             return structured_actions
 

@@ -34,4 +34,12 @@ ocr_*.png
 *_output_*.xlsx
 *_output_*.docx
 *_output_*.pptx
+demo.xlsx
+output.xlsx
+output.docx
+output.pptx
 *.pdf.tmp
+*.tmp.pdf
+temp_*.pdf
+tmp_*.pdf
+frontend/*.tsbuildinfo

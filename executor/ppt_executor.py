@@ -7,7 +7,26 @@ logger = logging.getLogger("OfficeAgent")
 
 def _pt_color(hex_color):
     from pptx.dml.color import RGBColor
-    h = hex_color.lstrip("#")
+    named = {
+        "red": "FF0000",
+        "green": "00B050",
+        "blue": "0070C0",
+        "yellow": "FFFF00",
+        "orange": "FFA500",
+        "purple": "7030A0",
+        "pink": "FF69B4",
+        "black": "000000",
+        "white": "FFFFFF",
+        "gray": "808080",
+        "grey": "808080",
+        "navy": "000080",
+        "darkblue": "00008B",
+        "dark blue": "00008B",
+    }
+    raw = str(hex_color or "000000").strip().lower()
+    h = named.get(raw, raw).lstrip("#")
+    if len(h) == 8:
+        h = h[-6:]
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
@@ -96,9 +115,16 @@ class PowerPointExecutor:
 
     def _do_duplicate_slide(self, p):
         import copy
-        template  = self._slide(p)
-        slide_xml = copy.deepcopy(template._element)
-        self.prs.slides._sldIdLst.append(slide_xml)
+        template = self._slide(p)
+        layout_idx = min(6, len(self.prs.slide_layouts) - 1)
+        duplicate = self.prs.slides.add_slide(self.prs.slide_layouts[layout_idx])
+        # External/user slide index is 1-based; duplicate is appended to the
+        # end while preserving the selected slide's visible shapes.
+        for shape in list(duplicate.shapes):
+            element = shape.element
+            element.getparent().remove(element)
+        for shape in template.shapes:
+            duplicate.shapes._spTree.insert_element_before(copy.deepcopy(shape.element), "p:extLst")
 
     def _do_reorder_slide(self, p):
         from_idx = self._internal_slide_index(p.get("from_index"), default=1)

@@ -7,7 +7,24 @@ logger = logging.getLogger("OfficeAgent")
 
 def _wd_color(hex_color):
     from docx.shared import RGBColor
-    h = hex_color.lstrip("#")
+    named = {
+        "red": "FF0000",
+        "green": "00B050",
+        "blue": "0070C0",
+        "yellow": "FFFF00",
+        "orange": "FFA500",
+        "purple": "7030A0",
+        "pink": "FF69B4",
+        "black": "000000",
+        "white": "FFFFFF",
+        "gray": "808080",
+        "grey": "808080",
+        "navy": "000080",
+    }
+    raw = str(hex_color or "000000").strip().lower()
+    h = named.get(raw, raw).lstrip("#")
+    if len(h) == 8:
+        h = h[-6:]
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 

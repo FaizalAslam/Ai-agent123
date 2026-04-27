@@ -72,7 +72,15 @@ Office document commands can be sent from the Office Agent tab or the command ce
 - `create a new PowerPoint presentation`
 - `create a presentation with 3 slides about sales performance`
 
-Generated Office files are saved under `outputs/` unless the request provides a specific file path or filename. Existing files opened with `open_workbook`, `open_document`, or `open_presentation` are loaded from the provided path and saved back to that path unless a save-as action supplies another output path.
+Generated Office files are saved under `outputs/office/<app>/` unless the request provides a specific file path or filename. Existing files opened with `open_workbook`, `open_document`, or `open_presentation` are loaded from the provided path and saved back to that path unless a save-as action supplies another output path.
+
+Common Office commands are handled by the deterministic planner first, without requiring an OpenAI key. The planner supports multi-line and multi-step commands such as:
+
+- `create workbook, add table with 5 rows and 3 columns, make header bold`
+- `create document. Add heading Summary. Add paragraph This is the first draft.`
+- `create presentation, add title slide, add agenda slide, add conclusion slide`
+
+OpenAI is optional fallback parsing for ambiguous Office instructions and OCR/PDF text cleanup. If no key is configured, common Office creation/editing commands still work.
 
 ## OCR Notes
 
@@ -94,6 +102,16 @@ python smoke_test_office_routes.py
 ```
 
 The script verifies Office routing, generated file existence, structured backend responses, unknown app-launch fallback behavior, and the frontend reliability script hook.
+
+It also verifies multi-command parsing, open-path Office actions, Excel visible background fills, PowerPoint 1-based slide indexing, alias pollution guards, command-cache exact matching, and OpenAI fallback error shaping.
+
+## Troubleshooting
+
+- Backend not running: start Flask with `python server.py`, then refresh the Next.js UI.
+- Frontend proxy issue: confirm `frontend/.env.local` points to `http://127.0.0.1:5000`, or use the default when Flask runs locally.
+- Office command asks for an executable: run `python smoke_test_office_routes.py`; Office document commands should route to `/office/execute`, not manual app selection.
+- OpenAI key missing: deterministic Office commands still work. Add `OPENAI_API_KEY` only if you want fallback parsing or OCR/PDF cleanup.
+- Generated file not found: check `outputs/office/excel/`, `outputs/office/word/`, or `outputs/office/powerpoint/`.
 
 ## Frontend Manual Checklist
 

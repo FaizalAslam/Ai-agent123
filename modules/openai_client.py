@@ -1,13 +1,24 @@
 # modules/openai_client.py
 import re
 import platform
+import logging
 from openai import OpenAI
 from . import config
+
+logger = logging.getLogger("OfficeAgent")
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=10)
+    return _client
 
 
 def guess_path_with_ai(app_name):
     if not config.OPENAI_API_KEY:
-        print("OpenAI key missing.")
+        logger.info("OpenAI app-path fallback skipped: API key missing.")
         return None
 
     system = platform.system().lower()
@@ -29,11 +40,11 @@ def guess_path_with_ai(app_name):
         prompt = f'Return only the absolute path for {app_name} on Linux.'
 
     try:
-        client   = OpenAI(api_key=config.OPENAI_API_KEY)
-        response = client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0
+            temperature=0,
+            max_tokens=120,
         )
         text = response.choices[0].message.content.strip()
 
@@ -43,12 +54,12 @@ def guess_path_with_ai(app_name):
         match = re.search(r'[a-zA-Z]:\\[^<>:"/|?*\n]+|/[^\s<>:"|?*\n]+', text)
         if match:
             clean = match.group(0).strip()
-            print(f"OpenAI found path: {clean}")
+            logger.info("OpenAI app-path fallback returned a candidate path.")
             return clean
         return None
 
     except Exception as e:
-        print(f"OpenAI Error: {e}")
+        logger.warning("OpenAI app-path fallback failed: %s", e)
         return None
 
 
@@ -97,19 +108,19 @@ RAW TEXT:
 Output the clean spoken script now:"""
 
     try:
-        client   = OpenAI(api_key=config.OPENAI_API_KEY)
-        response = client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            temperature=0.3,
+            max_tokens=1200,
         )
         cleaned = response.choices[0].message.content.strip()
         if not cleaned or len(cleaned) < 20:
-            print("OpenAI returned empty; using raw text")
+            logger.info("OpenAI OCR/PDF cleanup returned empty; using raw text.")
             return raw_text
-        print(f"OpenAI cleaned text: {len(raw_text)} -> {len(cleaned)} chars")
+        logger.info("OpenAI OCR/PDF cleanup completed: input_chars=%s output_chars=%s", len(raw_text), len(cleaned))
         return cleaned
 
     except Exception as e:
-        print(f"OpenAI clean error: {e}; using raw text")
+        logger.warning("OpenAI OCR/PDF cleanup failed; using raw text: %s", e)
         return raw_text
