@@ -33,17 +33,17 @@ class WordExecutor:
         self.doc = doc
 
     def run(self, action_dict):
-        action  = action_dict.get("action")
+        action  = action_dict.get("action", "unknown")
         handler = getattr(self, f"_do_{action}", None)
         if not handler:
             logger.warning(f"Word: Unknown action '{action}'")
-            return False
+            return {"status": "failed", "action": action, "message": f"Unknown action: {action}", "error_code": "UNKNOWN_ACTION"}
         try:
             handler(action_dict)
-            return True
+            return {"status": "success", "action": action, "message": ""}
         except Exception as e:
             logger.error(f"Word action '{action}' failed: {e}")
-            return False
+            return {"status": "failed", "action": action, "message": str(e), "error_code": "ACTION_EXECUTION_ERROR"}
 
     def _targeted_paragraphs(self, p):
         target = str(p.get("target", "selection") or "selection").strip()

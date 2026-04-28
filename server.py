@@ -33,6 +33,7 @@ from executor.word_executor import WordExecutor
 from executor.ppt_executor import PowerPointExecutor
 from parser.command_parser import parse_command
 from parser.command_planner import plan_office_command, split_command_clauses
+from parser.command_complexity import classify_office_command_complexity
 from ai.openai_handler import OpenAIHandler
 from listener.keyboard_listener import KeyboardListener
 from listener.clipboard_listener import ClipboardListener
@@ -305,6 +306,77 @@ def _resolve_actions(app_name, command_text):
 
         return all(checks) if checks else True
 
+    complexity = classify_office_command_complexity(command_text)
+    logging.info("Office command complexity [%s]: %s — %r", app_name, complexity, command_text[:120])
+
+    # ── Diagnostics collector ──────────────────────────────────────────────────
+    # Carried through every return path and embedded into plan_info["diag"] so
+    # the caller can include it in every API response without extra round-trips.
+    diag = {
+        "openai_attempted": False,
+        "openai_success": False,
+        "openai_error_code": None,
+        "fallback_reason": "",
+        "raw_action_count": 0,
+        "normalized_action_count": 0,
+        "validation_errors": [],
+    }
+
+    def _with_diag(pi, extra_diag=None):
+        """Embed diagnostics (+ any OpenAI metadata) into plan_info."""
+        if extra_diag:
+            diag.update(extra_diag)
+        base = dict(pi) if isinstance(pi, dict) else {}
+        base["diag"] = dict(diag)
+        return base
+
+    def _ai_plan_info(result):
+        """Build plan_info dict from an OpenAI result, carrying output_filename and context."""
+        info = {}
+        if result.output_filename:
+            info["output_filename"] = result.output_filename
+        if result.ai_context:
+            info["ai_context"] = result.ai_context
+        return info
+
+    def _call_openai(reason_label):
+        """Call OpenAI, log structured events, and update diag in-place."""
+        logging.info("OPENAI_PLANNER_CALLED app=%s command_len=%d", app_name, len(command_text))
+        result = _openai_handler.interpret_result(app_name, command_text)
+        logging.info(
+            "OPENAI_PLANNER_RESULT success=%s error_code=%s action_count=%d",
+            result.success,
+            result.error_code or "",
+            len(result.actions),
+        )
+        diag["openai_attempted"] = True
+        diag["openai_success"] = result.success
+        if not result.success:
+            diag["openai_error_code"] = result.error_code or ""
+        diag["fallback_reason"] = reason_label
+        return result
+
+    # Semantic-complex commands (vague, generative, inferred ranges) skip deterministic
+    # parsing and go straight to OpenAI, which handles them far more reliably.
+    if complexity == "semantic_complex":
+        logging.info("Routing semantic_complex command directly to OpenAI for [%s]", app_name)
+        ai_result = _call_openai("semantic_complex_routed_to_openai")
+        if ai_result.success:
+            diag["raw_action_count"] = len(ai_result.actions)
+            try:
+                normalized = validate_actions(app_name, ai_result.actions, known_actions=_known_office_actions(app_name))
+            except OfficeActionError as exc:
+                diag["openai_error_code"] = exc.error_code
+                diag["validation_errors"].append(exc.message)
+                diag["fallback_reason"] = "openai_validation_failed"
+                return command_text, [], "openai-fallback", exc, _with_diag(_ai_plan_info(ai_result))
+            diag["normalized_action_count"] = len(normalized)
+            command_map.save_actions(app_name, command_text, normalized)
+            return command_text, normalized, "openai-fallback", None, _with_diag(_ai_plan_info(ai_result))
+        # OpenAI failed for semantic command — fall through to deterministic as best effort.
+        diag["fallback_reason"] = "semantic_openai_failed_fell_through"
+        logging.info("OpenAI unavailable for semantic command; falling through to deterministic. error=%s", ai_result.error_code)
+
     cache_key, cached_actions, cache_score = command_map.get_cached_actions(app_name, command_text)
     # Use cache only for exact matches; fuzzy cache reuse can apply stale actions
     # to similar-but-different commands.
@@ -315,6 +387,7 @@ def _resolve_actions(app_name, command_text):
             validated_cached = validate_actions(app_name, cached_actions, known_actions=_known_office_actions(app_name))
         except OfficeActionError as exc:
             logging.info("Ignoring invalid command cache for [%s]: %s", app_name, exc.message)
+            diag["validation_errors"].append(f"cache: {exc.message}")
             validated_cached = []
         if (
             validated_cached
@@ -322,47 +395,87 @@ def _resolve_actions(app_name, command_text):
             and _actions_cover_command_intents(app_name, command_text, validated_cached)
         ):
             logging.info(f"Office cache hit [{app_name}] score={cache_score}: {command_text}")
-            return cache_key or command_text, validated_cached, "command-cache", None, None
+            diag["fallback_reason"] = "cache_hit"
+            diag["raw_action_count"] = len(cached_actions)
+            diag["normalized_action_count"] = len(validated_cached)
+            return cache_key or command_text, validated_cached, "command-cache", None, _with_diag(None)
         logging.info(
             f"Ignoring stale cache for [{app_name}] command (cached={cached_count}, clauses={clause_count}): {command_text}"
         )
 
     plan = plan_office_command(app_name, command_text)
     plan_info = plan.to_dict()
-    if plan.actions:
-        if plan.errors and not plan.success:
-            logging.info(
-                "Office planner partial parse: app=%s clauses=%s actions=%s errors=%s",
-                app_name,
-                len(plan.clauses),
-                len(plan.actions),
-                len(plan.errors),
-            )
+
+    # Save partial plan as last-resort fallback; only commit to planner result
+    # when it fully succeeded (requires_api=False means no clause errors).
+    _partial_plan_actions = plan.actions or []
+    _partial_plan_info    = plan_info
+
+    if plan.actions and not plan.requires_api:
+        # Planner fully parsed all clauses — validate and return.
+        diag["raw_action_count"] = len(plan.actions)
         try:
             actions = validate_actions(app_name, plan.actions, known_actions=_known_office_actions(app_name))
         except OfficeActionError as exc:
-            return command_text, [], "planner", exc, plan_info
-        if plan.success and not plan.errors:
-            command_map.save_actions(app_name, command_text, actions)
-        return command_text, actions, "planner", None, plan_info
+            # Validation failed on planner output — fall through to parser/OpenAI.
+            diag["validation_errors"].append(f"planner: {exc.message}")
+            diag["fallback_reason"] = "planner_validation_failed_fell_through"
+            logging.info(
+                "Office planner validation failed for [%s]; falling through to parser. Command: %s",
+                app_name, command_text,
+            )
+            logging.warning("OFFICE_VALIDATION_FAILED errors=%s", diag["validation_errors"])
+        else:
+            diag["fallback_reason"] = "planner_success"
+            diag["normalized_action_count"] = len(actions)
+            if plan.success and not plan.errors:
+                command_map.save_actions(app_name, command_text, actions)
+            return command_text, actions, "planner", None, _with_diag(plan_info)
+    elif plan.actions and plan.requires_api:
+        diag["raw_action_count"] = len(plan.actions)
+        diag["fallback_reason"] = "planner_partial_fell_through"
+        logging.info(
+            "Office planner partial parse (requires_api=True): app=%s clauses=%s actions=%s errors=%s — falling through",
+            app_name, len(plan.clauses), len(plan.actions), len(plan.errors),
+        )
 
-    actions = parse_command(app_name, command_text)
-    if actions:
+    raw_parser_actions = parse_command(app_name, command_text)
+    if raw_parser_actions:
+        diag["raw_action_count"] = max(diag["raw_action_count"], len(raw_parser_actions))
         try:
-            actions = validate_actions(app_name, actions, known_actions=_known_office_actions(app_name))
+            actions = validate_actions(app_name, raw_parser_actions, known_actions=_known_office_actions(app_name))
         except OfficeActionError as exc:
-            return command_text, [], "json-parser", exc, None
-        command_map.save_actions(app_name, command_text, actions)
-        return command_text, actions, "json-parser", None, None
+            # Parser produced invalid actions — fall through to OpenAI rather than
+            # returning an error that blocks the fallback entirely.
+            diag["validation_errors"].append(f"parser: {exc.message}")
+            diag["fallback_reason"] = "parser_validation_failed_fell_through"
+            logging.info(
+                "Office parser validation failed for [%s]; falling through to OpenAI. Command: %s",
+                app_name, command_text,
+            )
+            logging.warning("OFFICE_VALIDATION_FAILED errors=%s", diag["validation_errors"])
+            actions = []
+        else:
+            diag["fallback_reason"] = "parser_success"
+            diag["normalized_action_count"] = len(actions)
+            command_map.save_actions(app_name, command_text, actions)
+            return command_text, actions, "json-parser", None, _with_diag(None)
 
-    ai_result = _openai_handler.interpret_result(app_name, command_text)
+    ai_result = _call_openai("openai_fallback")
     if ai_result.success:
+        diag["raw_action_count"] = max(diag["raw_action_count"], len(ai_result.actions))
         try:
             normalized = validate_actions(app_name, ai_result.actions, known_actions=_known_office_actions(app_name))
         except OfficeActionError as exc:
-            return command_text, [], "openai-fallback", exc, None
+            diag["openai_error_code"] = exc.error_code
+            diag["validation_errors"].append(f"openai: {exc.message}")
+            diag["fallback_reason"] = "openai_validation_failed"
+            logging.warning("OFFICE_VALIDATION_FAILED errors=%s", diag["validation_errors"])
+            return command_text, [], "openai-fallback", exc, _with_diag(_ai_plan_info(ai_result))
+        diag["normalized_action_count"] = len(normalized)
+        diag["fallback_reason"] = "openai_fallback_success"
         command_map.save_actions(app_name, command_text, normalized)
-        return command_text, normalized, "openai-fallback", None, None
+        return command_text, normalized, "openai-fallback", None, _with_diag(_ai_plan_info(ai_result))
 
     if ai_result.error_code in {
         "OPENAI_INVALID_JSON",
@@ -370,24 +483,47 @@ def _resolve_actions(app_name, command_text):
         "OPENAI_UNSUPPORTED_ACTION",
         "COMMAND_TOO_LONG",
     }:
+        diag["fallback_reason"] = "openai_hard_failure"
         return command_text, [], "openai-fallback", OfficeActionError(
             ai_result.error_code or "OPENAI_REQUEST_FAILED",
             ai_result.message or "OpenAI fallback could not parse this Office command.",
             ai_result.raw_response_preview or "",
-        ), None
+        ), _with_diag(None)
+
+    # Use partial planner output as a last resort before the generic intent fallback.
+    if _partial_plan_actions:
+        logging.info(
+            "Using partial planner result as last resort for [%s]: %d actions",
+            app_name, len(_partial_plan_actions),
+        )
+        try:
+            validated_partial = validate_actions(
+                app_name, _partial_plan_actions, known_actions=_known_office_actions(app_name)
+            )
+        except OfficeActionError as exc:
+            diag["validation_errors"].append(f"partial-planner: {exc.message}")
+            validated_partial = []
+        if validated_partial:
+            diag["fallback_reason"] = "partial_planner_fallback"
+            diag["normalized_action_count"] = len(validated_partial)
+            return command_text, validated_partial, "planner-partial", None, _with_diag(_partial_plan_info)
 
     fallback = _default_create_action(app_name, command_text)
     if fallback:
-        return command_text, [fallback], "office-intent-fallback", None, None
+        diag["fallback_reason"] = "intent_fallback_create"
+        diag["normalized_action_count"] = 1
+        return command_text, [fallback], "office-intent-fallback", None, _with_diag(None)
 
     if ai_result.error_code:
+        diag["fallback_reason"] = "openai_unavailable_no_match"
         return command_text, [], "openai-fallback", OfficeActionError(
             ai_result.error_code,
             ai_result.message or "OpenAI fallback was unavailable.",
             ai_result.raw_response_preview or "",
-        ), None
+        ), _with_diag(None)
 
-    return command_text, [], "no-match", None, None
+    diag["fallback_reason"] = "no_match"
+    return command_text, [], "no-match", None, _with_diag(None)
 
 
 def _extract_named_file_path(command_text, app_name):
@@ -497,6 +633,11 @@ def resolve_office_file_path(request_payload, actions, app_type, mode=None):
         }
 
     open_value, open_action = _first_action_path(actions, _open_action_names(app_name))
+    if not open_value and open_action is not None:
+        # open_workbook/open_document/open_presentation action exists but has no path.
+        # Try to extract the filename from the command text so the resolver can
+        # search Desktop/Documents/Downloads.
+        open_value = _extract_named_file_path(command_text, app_name) or ""
     try:
         open_path = str(resolve_existing_office_path(
             open_value,
@@ -834,10 +975,11 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             for idx, action in enumerate(actions or []):
                 current_wb = getattr(executor, "wb", wb)
                 setattr(current_wb, "_path", output_path)
-                ok = bool(executor.run(action))
+                result = executor.run(action)
                 current_wb = getattr(executor, "wb", current_wb)
                 setattr(current_wb, "_path", output_path)
                 action_name = action.get("action", "unknown")
+                ok = isinstance(result, dict) and result.get("status") == "success"
                 if ok:
                     executed.append(action_name)
                     results.append({
@@ -847,13 +989,15 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                         "target": action.get("range") or action.get("cell") or action.get("start_cell") or "",
                     })
                 else:
-                    failures.append(f"{action_name} failed")
+                    msg = (result.get("message") or f"{action_name} failed") if isinstance(result, dict) else f"{action_name} failed"
+                    err = (result.get("error_code") or "OFFICE_ACTION_FAILED") if isinstance(result, dict) else "OFFICE_ACTION_FAILED"
+                    failures.append(msg)
                     results.append({
                         "action_index": idx,
                         "action": action_name,
                         "status": "failed",
-                        "error_code": "OFFICE_ACTION_FAILED",
-                        "message": f"{action_name} failed",
+                        "error_code": err,
+                        "message": msg,
                         "target": action.get("range") or action.get("cell") or action.get("start_cell") or "",
                     })
 
@@ -870,10 +1014,11 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             for idx, action in enumerate(actions or []):
                 current_doc = getattr(executor, "doc", doc)
                 setattr(current_doc, "_path", output_path)
-                ok = bool(executor.run(action))
+                result = executor.run(action)
                 current_doc = getattr(executor, "doc", current_doc)
                 setattr(current_doc, "_path", output_path)
                 action_name = action.get("action", "unknown")
+                ok = isinstance(result, dict) and result.get("status") == "success"
                 if ok:
                     executed.append(action_name)
                     results.append({
@@ -883,13 +1028,15 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                         "target": action.get("target") or action.get("text") or "",
                     })
                 else:
-                    failures.append(f"{action_name} failed")
+                    msg = (result.get("message") or f"{action_name} failed") if isinstance(result, dict) else f"{action_name} failed"
+                    err = (result.get("error_code") or "OFFICE_ACTION_FAILED") if isinstance(result, dict) else "OFFICE_ACTION_FAILED"
+                    failures.append(msg)
                     results.append({
                         "action_index": idx,
                         "action": action_name,
                         "status": "failed",
-                        "error_code": "OFFICE_ACTION_FAILED",
-                        "message": f"{action_name} failed",
+                        "error_code": err,
+                        "message": msg,
                         "target": action.get("target") or action.get("text") or "",
                     })
 
@@ -906,10 +1053,11 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
             for idx, action in enumerate(actions or []):
                 current_prs = getattr(executor, "prs", prs)
                 setattr(current_prs, "_path", output_path)
-                ok = bool(executor.run(action))
+                result = executor.run(action)
                 current_prs = getattr(executor, "prs", current_prs)
                 setattr(current_prs, "_path", output_path)
                 action_name = action.get("action", "unknown")
+                ok = isinstance(result, dict) and result.get("status") == "success"
                 if ok:
                     executed.append(action_name)
                     results.append({
@@ -919,13 +1067,15 @@ def _run_office_actions(app_name, actions, file_path=None, command_text="", sour
                         "target": action.get("slide_index") or action.get("target") or "",
                     })
                 else:
-                    failures.append(f"{action_name} failed")
+                    msg = (result.get("message") or f"{action_name} failed") if isinstance(result, dict) else f"{action_name} failed"
+                    err = (result.get("error_code") or "OFFICE_ACTION_FAILED") if isinstance(result, dict) else "OFFICE_ACTION_FAILED"
+                    failures.append(msg)
                     results.append({
                         "action_index": idx,
                         "action": action_name,
                         "status": "failed",
-                        "error_code": "OFFICE_ACTION_FAILED",
-                        "message": f"{action_name} failed",
+                        "error_code": err,
+                        "message": msg,
                         "target": action.get("slide_index") or action.get("target") or "",
                     })
 
@@ -1282,6 +1432,7 @@ def _office_execute_impl(data):
         )
 
     logging.info("Office request: original=%r app=%s", full or command, app_name)
+    cmd_complexity = classify_office_command_complexity(command)
 
     cache_key, actions, source, action_error, plan_info = _resolve_actions(app_name, command)
     if action_error:
@@ -1308,6 +1459,16 @@ def _office_execute_impl(data):
         )
 
     requested_file_path = (data.get("file_path") or data.get("file") or "").strip()
+
+    # If OpenAI suggested a bare output filename, use it when the request didn't
+    # supply an explicit path. Only trust bare filenames (no directory component)
+    # to prevent LLM-injected path traversal.
+    if not requested_file_path and plan_info and plan_info.get("output_filename"):
+        ai_fname = os.path.basename(str(plan_info["output_filename"])).strip()
+        if ai_fname:
+            requested_file_path = ai_fname
+            logging.info("Using OpenAI-suggested output filename: %r for [%s]", ai_fname, app_name)
+
     actions = _ensure_fresh_file_action(app_name, command, actions, requested_file_path)
     actions = _expand_powerpoint_slide_count(app_name, command, actions)
     try:
@@ -1397,6 +1558,8 @@ def _office_execute_impl(data):
             status="partial_success",
             app_type=app_name,
             action_type=resolution.get("action_type", "unknown"),
+            complexity=cmd_complexity,
+            parser_used=source,
             details=" | ".join(plan_info.get("errors") or []),
             source=source,
             plan=plan_info,
@@ -1417,6 +1580,8 @@ def _office_execute_impl(data):
         intent="office_automation",
         app_type=app_name,
         action_type=resolution.get("action_type", "unknown"),
+        complexity=cmd_complexity,
+        parser_used=source,
         file_path=summary["output_path"],
         source=source,
         plan=plan_info,

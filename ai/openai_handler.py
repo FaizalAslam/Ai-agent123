@@ -32,15 +32,32 @@ SYSTEM_PROMPT = """
 You are an Office Automation Assistant for a local desktop automation app.
 Convert user commands into executable Office JSON actions.
 
+Preferred response format — a JSON object:
+{
+  "app": "<excel|word|powerpoint>",
+  "intent": "<create|open|edit|format|save|...>",
+  "output_filename": "<filename.xlsx|filename.docx|filename.pptx>",
+  "context": {
+    "table_range": "A1:C5",
+    "header_range": "A1:C1",
+    "data_range": "A2:C5",
+    "columns_range": "A:C"
+  },
+  "actions": [ { "action": "...", ... } ],
+  "warnings": []
+}
+
+Fallback: a plain JSON array of action objects is also accepted.
+
 Rules:
-- Return ONLY a valid JSON array.
-- Do not wrap the JSON in markdown.
-- Do not include explanations.
-- For one step, return an array containing one object.
+- Do not wrap the JSON in markdown code fences.
+- Do not include prose explanations.
 - Use only supported actions for the requested app.
 - PowerPoint slide_index values are user-facing 1-based slide numbers.
 - Excel range or cell fields must be explicit for formatting/cell actions.
 - Word style targets should be conservative: heading, heading_1, body, selection, or all.
+- output_filename: include only the filename (no directory path). Omit if not applicable.
+- context: include only ranges that were explicitly computed from the command. Omit unknown fields.
 """
 
 
@@ -56,6 +73,8 @@ class OpenAIParseResult:
     duration_ms: int = 0
     usage: dict | None = None
     warnings: list[str] = field(default_factory=list)
+    output_filename: str = ""
+    ai_context: dict = field(default_factory=dict)
 
     def to_dict(self):
         return asdict(self)
@@ -94,14 +113,42 @@ class OpenAIHandler:
         )
 
     def _parse_json(self, text):
+        """Parse OpenAI response into (actions, warnings, output_filename, ai_context).
+
+        Accepts two response shapes:
+        - Plain array:  [{...}, ...]
+        - Structured:   {"actions": [...], "output_filename": "...", "context": {...}, ...}
+        """
         warnings = []
         clean = (text or "").strip()
         clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
         clean = re.sub(r"\s*```$", "", clean).strip()
 
+        def _extract(parsed):
+            if isinstance(parsed, list):
+                return parsed, "", {}
+            if isinstance(parsed, dict):
+                if "actions" in parsed:
+                    # New structured format: {"actions": [...], "output_filename": ..., ...}
+                    actions = parsed.get("actions") or []
+                    if not isinstance(actions, list):
+                        actions = []
+                    output_filename = str(parsed.get("output_filename") or "").strip()
+                    ai_context = parsed.get("context") or {}
+                    if not isinstance(ai_context, dict):
+                        ai_context = {}
+                    gpt_warnings = parsed.get("warnings") or []
+                    if isinstance(gpt_warnings, list):
+                        warnings.extend(str(w) for w in gpt_warnings if w)
+                    return actions, output_filename, ai_context
+                # Legacy: plain action object {"action": "...", ...}
+                return [parsed], "", {}
+            return [], "", {}
+
         try:
             parsed = json.loads(clean)
-            return parsed, warnings
+            actions, output_filename, ai_context = _extract(parsed)
+            return actions, warnings, output_filename, ai_context
         except json.JSONDecodeError:
             pass
 
@@ -112,7 +159,9 @@ class OpenAIHandler:
         if match:
             try:
                 warnings.append("OpenAI response contained extra text around JSON.")
-                return json.loads(match.group(1)), warnings
+                parsed = json.loads(match.group(1))
+                actions, output_filename, ai_context = _extract(parsed)
+                return actions, warnings, output_filename, ai_context
             except json.JSONDecodeError:
                 pass
 
@@ -186,9 +235,9 @@ class OpenAIHandler:
                 )
                 content = (response.choices[0].message.content or "").strip()
                 preview = content[:300]
-                parsed, warnings = self._parse_json(content)
+                parsed_actions, warnings, output_filename, ai_context = self._parse_json(content)
                 try:
-                    actions = normalize_actions(parsed)
+                    actions = normalize_actions(parsed_actions)
                     actions = validate_actions(app_name, actions)
                 except OfficeActionError as exc:
                     code = "OPENAI_UNSUPPORTED_ACTION" if exc.error_code == "UNSUPPORTED_ACTION" else "OPENAI_INVALID_ACTION_SCHEMA"
@@ -206,10 +255,11 @@ class OpenAIHandler:
                 self.last_error_code = ""
                 self.last_error = ""
                 logger.info(
-                    "OpenAI fallback result: model=%s duration_ms=%s success=True actions=%s warnings=%s",
+                    "OpenAI fallback result: model=%s duration_ms=%s success=True actions=%s output_filename=%r warnings=%s",
                     self.model,
                     duration_ms,
                     len(actions),
+                    output_filename,
                     len(warnings),
                 )
                 return OpenAIParseResult(
@@ -222,6 +272,8 @@ class OpenAIHandler:
                     duration_ms=duration_ms,
                     usage=self._usage_dict(getattr(response, "usage", None)),
                     warnings=warnings,
+                    output_filename=output_filename,
+                    ai_context=ai_context,
                 )
 
             except OfficeActionError as exc:

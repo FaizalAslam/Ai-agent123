@@ -661,6 +661,46 @@
         "action": "open_workbook",
         "path": "Test_File22 from the desktop"
       }
+    ],
+    "Create a new Excel workbook, add one worksheet named \"Report\", insert a table with 5 rows and 3 columns starting from cell A1, use the headers Name, Amount, and Status, make the headers bold with a yellow background, fill in sample data, format the Amount column as currency, apply borders to all cells, center the headers, auto-fit all columns, and save the workbook as \"Report.xlsx\".": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Report"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1",
+        "bold": true
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C1"
+      },
+      {
+        "action": "set_alignment",
+        "range": "A1:C1",
+        "alignment": "center"
+      },
+      {
+        "action": "autofit_columns"
+      },
+      {
+        "action": "save_workbook"
+      }
     ]
   },
   "word": {

@@ -8,6 +8,7 @@ from executor.excel_executor import _normalize_excel_argb
 from openpyxl import Workbook, load_workbook
 from pptx import Presentation
 from docx import Document
+from parser.command_complexity import classify_office_command_complexity
 from utils import command_map
 from utils.app_alias_guard import validate_manual_app_alias
 from utils.file_paths import resolve_existing_office_path
@@ -135,6 +136,12 @@ def main():
         assert ok is False and code == "MANUAL_APP_ALIAS_REJECTED_DOCUMENT_COMMAND"
         assert validate_manual_app_alias("chrome")[0] is True
 
+        # Complexity classifier
+        assert classify_office_command_complexity("create a new Excel file") == "simple"
+        assert classify_office_command_complexity("create workbook then bold header") == "compound_explicit"
+        assert classify_office_command_complexity("create a professional spreadsheet with sample data") == "semantic_complex"
+        assert classify_office_command_complexity("make it look good and professional") == "semantic_complex"
+
         assert _normalize_excel_argb("FF0000") == "FFFF0000"
         assert _normalize_excel_argb("#FF0000") == "FFFF0000"
         assert _normalize_excel_argb("yellow") == "FFFFFF00"
@@ -183,6 +190,18 @@ def main():
         assert len(wb.active.tables) >= 1
         assert wb.active["A1"].value == "Column1"
 
+        # Explicit headers must override Column1/Column2/Column3 defaults
+        excel_headers = _post_office(
+            client,
+            "excel",
+            "create workbook; add table with headers Name, Amount, Status and 5 rows",
+        )
+        excel_headers_path = _assert_office_file(excel_headers, ".xlsx")
+        wb_h = load_workbook(excel_headers_path)
+        assert wb_h.active["A1"].value == "Name",   wb_h.active["A1"].value
+        assert wb_h.active["B1"].value == "Amount", wb_h.active["B1"].value
+        assert wb_h.active["C1"].value == "Status", wb_h.active["C1"].value
+
         excel_format = _post_office(
             client,
             "excel",
@@ -202,7 +221,7 @@ def main():
         contextual_ws = load_workbook(contextual_path).active
         assert contextual_ws["A1"].font.bold is True
         assert contextual_ws["A1"].border.left.style == "thin"
-        assert excel_contextual.get("plan", {}).get("context", {}).get("header_range") == "A1:C1", excel_contextual
+        assert (excel_contextual.get("plan") or {}).get("context", {}).get("header_range") == "A1:C1", excel_contextual
         assert "WIDTHS:WIDTHS" not in json.dumps(excel_contextual), excel_contextual
 
         multiline = _post_office(
@@ -438,8 +457,23 @@ def main():
         result = handler.interpret_result("excel", "add a complex chart")
         assert result.success is False
         assert result.error_code == "OPENAI_API_KEY_MISSING"
-        parsed, _ = handler._parse_json('{"action":"create_workbook"}')
-        assert normalize_actions(parsed) == [{"action": "create_workbook"}]
+
+        # _parse_json now returns (actions, warnings, output_filename, ai_context)
+        actions_plain, _w, _fn, _ctx = handler._parse_json('[{"action":"create_workbook"}]')
+        assert normalize_actions(actions_plain) == [{"action": "create_workbook"}]
+
+        # Structured object response format
+        actions_obj, _w, fn_obj, ctx_obj = handler._parse_json(
+            '{"app":"excel","output_filename":"Budget.xlsx","context":{"table_range":"A1:C5"},"actions":[{"action":"create_workbook"}],"warnings":[]}'
+        )
+        assert normalize_actions(actions_obj) == [{"action": "create_workbook"}]
+        assert fn_obj == "Budget.xlsx"
+        assert ctx_obj == {"table_range": "A1:C5"}
+
+        # Plain object (legacy — single action not in array)
+        actions_single, _w2, _fn2, _ctx2 = handler._parse_json('{"action":"create_workbook"}')
+        assert normalize_actions(actions_single) == [{"action": "create_workbook"}]
+
         try:
             handler._parse_json("{not valid json")
             raise AssertionError("Malformed JSON should fail")

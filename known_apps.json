@@ -6,9 +6,5 @@
   "chrome music": {
     "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "type": "exe"
-  },
-  "test_file22 from desktop": {
-    "path": "C:\\Users\\",
-    "type": "exe"
   }
 }

@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
-type ChatRole = "user" | "assistant" | "status" | "success" | "error";
+type ChatRole = "user" | "assistant" | "status" | "success" | "error" | "partial";
 
 interface ChatMessage {
   id: string;
@@ -20,6 +20,7 @@ interface ChatMessage {
   content: string;
   filePath?: string;
   route?: string;
+  parserUsed?: string;
 }
 
 interface AssistantPageProps {
@@ -103,27 +104,31 @@ export function AssistantPage({ onToast }: AssistantPageProps) {
         : { command: route.command };
       const result = await apiPost(endpoint, payload);
       const filePath = resultFile(result.data);
+      const isPartial = result.status === "partial_success";
       const ok = result.ok;
-      const content = result.message || (ok ? "Command completed." : "Command failed.");
+      const role: ChatRole = ok ? "success" : isPartial ? "partial" : "error";
+      const content = result.message || (ok ? "Command completed." : isPartial ? "Command partially completed." : "Command failed.");
+      const parserUsed = (result.data as Record<string, unknown>)?.parser_used as string | undefined;
 
       setMessages((prev) => prev.filter((item) => item.id !== statusId).concat({
         id: messageId(),
-        role: ok ? "success" : "error",
+        role,
         content,
         filePath,
-        route: endpoint
+        route: endpoint,
+        parserUsed
       }));
 
       addHistoryRecord({
         name: trimmed,
         type: route.kind === "office" ? "office" : "app",
-        status: ok ? "success" : "error",
+        status: ok ? "success" : isPartial ? "partial" : "error",
         route: endpoint,
         message: content,
         filePath: filePath || undefined
       });
 
-      onToast({ tone: ok ? "success" : "error", message: content });
+      onToast({ tone: ok ? "success" : isPartial ? "info" : "error", message: content });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected frontend error.";
       setMessages((prev) => prev.filter((item) => item.id !== statusId).concat({
@@ -176,6 +181,7 @@ export function AssistantPage({ onToast }: AssistantPageProps) {
                     message.role === "user" ? "border-indigo-200 bg-indigo-600 text-white" :
                     message.role === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-950" :
                     message.role === "error" ? "border-red-200 bg-red-50 text-red-950" :
+                    message.role === "partial" ? "border-amber-200 bg-amber-50 text-amber-950" :
                     message.role === "status" ? "border-blue-200 bg-blue-50 text-blue-950" :
                     "border-line bg-white text-slate-700"
                   ].join(" ")}
@@ -210,6 +216,9 @@ export function AssistantPage({ onToast }: AssistantPageProps) {
                             Copy path
                           </button>
                         </div>
+                      )}
+                      {message.parserUsed && (
+                        <p className="mt-2 text-[10px] opacity-50">via {message.parserUsed}</p>
                       )}
                     </>
                   )}

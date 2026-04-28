@@ -71,17 +71,17 @@ class ExcelExecutor:
         return cells
 
     def run(self, action_dict):
-        action  = action_dict.get("action")
+        action  = action_dict.get("action", "unknown")
         handler = getattr(self, f"_do_{action}", None)
         if not handler:
             logger.warning(f"Excel: Unknown action '{action}'")
-            return False
+            return {"status": "failed", "action": action, "message": f"Unknown action: {action}", "error_code": "UNKNOWN_ACTION"}
         try:
             handler(action_dict)
-            return True
+            return {"status": "success", "action": action, "message": ""}
         except Exception as e:
             logger.error(f"Excel action '{action}' failed: {e}")
-            return False
+            return {"status": "failed", "action": action, "message": str(e), "error_code": "ACTION_EXECUTION_ERROR"}
 
     # â”€â”€ Cell / Range Operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -317,10 +317,26 @@ class ExcelExecutor:
         self.ws.column_dimensions[p["column"].upper()].width = float(p["width"])
 
     def _do_autofit_columns(self, p):
+        target_range = str(p.get("range") or p.get("columns") or "").upper().strip()
+        if target_range:
+            # Determine column letter bounds from range like "A:C" or "A1:C5"
+            col_match = re.match(r"^([A-Z]{1,3})(?:\d*)?:([A-Z]{1,3})(?:\d*)?$", target_range)
+            if col_match:
+                from openpyxl.utils import column_index_from_string, get_column_letter
+                start_idx = column_index_from_string(col_match.group(1))
+                end_idx   = column_index_from_string(col_match.group(2))
+                col_letters = [get_column_letter(i) for i in range(start_idx, end_idx + 1)]
+            else:
+                col_letters = [col[0].column_letter for col in self.ws.columns]
+        else:
+            col_letters = [col[0].column_letter for col in self.ws.columns]
+
         for col in self.ws.columns:
-            max_len   = max((len(str(c.value or "")) for c in col), default=0)
-            col_letter = col[0].column_letter
-            self.ws.column_dimensions[col_letter].width = min(max_len + 4, 60)
+            letter = col[0].column_letter
+            if letter not in col_letters:
+                continue
+            max_len = max((len(str(c.value or "")) for c in col), default=0)
+            self.ws.column_dimensions[letter].width = min(max_len + 4, 60)
 
     def _do_autofit_rows(self, p):
         logger.info("Autofit rows (approximate â€” full support requires win32com)")
@@ -477,13 +493,23 @@ class ExcelExecutor:
 
         start = p.get("start_cell", "A1")
         rows = max(2, int(p.get("rows", 5)))
-        cols = max(1, int(p.get("cols", 3)))
+        explicit_headers = p.get("headers") or []
+        if isinstance(explicit_headers, str):
+            explicit_headers = [h.strip() for h in explicit_headers.split(",") if h.strip()]
 
-        # Excel tables require a header row; generate defaults when missing.
+        # If explicit headers are provided, cols derives from them (prefer expanding to truncating).
+        if explicit_headers:
+            cols = max(len(explicit_headers), max(1, int(p.get("cols", len(explicit_headers)))))
+        else:
+            cols = max(1, int(p.get("cols", 3)))
+
         start_row, start_col = coordinate_to_tuple(start)
         for i in range(cols):
             header_cell = self.ws.cell(row=start_row, column=start_col + i)
-            if header_cell.value is None or str(header_cell.value).strip() == "":
+            if i < len(explicit_headers):
+                header_cell.value = explicit_headers[i]
+            elif header_cell.value is None or str(header_cell.value).strip() == "":
+                # Fall back to generic column name only when no explicit header supplied.
                 header_cell.value = f"Column{i + 1}"
 
         end     = self._offset_cell(start, rows - 1, cols - 1)

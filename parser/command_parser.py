@@ -49,7 +49,9 @@ def _extract_range(text):
     row_match = re.search(r'\brow\s*(\d+)\b', text.lower())
     if row_match:
         return f"{row_match.group(1)}:{row_match.group(1)}"
-    col_match = re.search(r'\bcolumn\s*([A-Za-z]+)\b', text.lower())
+    # Only match 1-3 letter column identifiers (e.g. "column A", "column AB").
+    # Words like "widths", "names", "headers" are 4+ chars and must not become ranges.
+    col_match = re.search(r'\bcolumn\s+([A-Za-z]{1,3})\b', text.lower())
     if col_match:
         c = col_match.group(1).upper()
         return f"{c}:{c}"
@@ -1121,8 +1123,27 @@ def _resolve_params(params, command_text, app):
             resolved[key] = _extract_filename(command_text) or "output"
 
         elif placeholder == "file_path":
+            # 1. Quoted path with extension
             path_match = re.search(r'["\']([^"\']+\.[a-z]{3,5})["\']', command_text)
-            resolved[key] = path_match.group(1) if path_match else ""
+            if path_match:
+                resolved[key] = path_match.group(1)
+            else:
+                # 2. Unquoted path/filename with extension
+                path_match = re.search(r'([A-Za-z]:[\\/][^"\']+\.[a-z]{2,5}|[^\s"\']+\.[a-z]{2,5})', command_text, re.IGNORECASE)
+                if path_match:
+                    resolved[key] = path_match.group(1)
+                else:
+                    # 3. Bare filename: "named/called/file Test_File on desktop"
+                    name_match = re.search(
+                        r'\b(?:named?|called?|file|workbook|document|presentation)\s+["\']?([A-Za-z0-9_\-\.][A-Za-z0-9_\-\. ]{0,79}?)["\']?(?=\s+(?:on|from|in|at)\s+(?:desktop|documents|downloads)|$)',
+                        command_text, re.IGNORECASE,
+                    )
+                    if name_match:
+                        raw = name_match.group(1).strip()
+                        raw = re.sub(r"^(?:named?|called?)\s+", "", raw, flags=re.IGNORECASE).strip()
+                        resolved[key] = raw if raw else ""
+                    else:
+                        resolved[key] = ""
 
         elif placeholder == "formula":
             resolved[key] = _extract_formula(command_text) or ""
@@ -1515,12 +1536,25 @@ def parse_command(app, raw_command):
 
         matches = _find_matching_commands(app, sub)
         if not matches:
-            heuristic = _heuristic_action(app, sub)
-            if heuristic:
-                all_actions.append(heuristic)
-                logger.info(f"Heuristic match for '{sub}' → {heuristic}")
-                continue
-            logger.info(f"No match found for: '{sub}'")
+            # Only use heuristic for single-clause simple creates.
+            # Complex commands (multi-clause or containing formatting/data keywords)
+            # should return [] so the OpenAI fallback can handle them properly.
+            _COMPLEX_INTENT_KWS = {
+                "format", "bold", "italic", "color", "background", "border",
+                "formula", "table", "row", "column", "chart", "protect",
+                "freeze", "filter", "sort", "font", "align", "wrap", "merge",
+                "rename", "insert", "delete", "header", "sample", "professional",
+                "neatly", "autofit", "auto-fit", "auto fit", "resize",
+            }
+            is_single_clause = len(sub_commands) == 1
+            has_complex_intent = any(kw in sub.lower() for kw in _COMPLEX_INTENT_KWS)
+            if is_single_clause and not has_complex_intent:
+                heuristic = _heuristic_action(app, sub)
+                if heuristic:
+                    all_actions.append(heuristic)
+                    logger.info(f"Heuristic match for '{sub}' → {heuristic}")
+                    continue
+            logger.info(f"No match found for: '{sub}' (is_single=%s, has_complex=%s)", is_single_clause, has_complex_intent)
             continue
 
         # Take top match (highest score), deduplicate by action+key params
