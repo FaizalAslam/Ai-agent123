@@ -58,6 +58,10 @@ class ExcelExecutor:
             raise ValueError(f"Sheet not found: {sheet_name}")
         return self.wb[sheet_name]
 
+    def _set_current_sheet(self, ws):
+        self.ws = ws
+        self.wb.active = self.wb.worksheets.index(ws)
+
     def _iter_cells(self, range_ref):
         ref = (range_ref or "").strip()
         if not ref:
@@ -95,25 +99,26 @@ class ExcelExecutor:
         import openpyxl
         start = p.get("start_cell", "A1")
         values = p.get("values", [])
+        try:
+            start_row, start_col = openpyxl.utils.cell.coordinate_to_tuple(start)
+        except Exception:
+            logger.warning("_do_write_range: invalid start_cell %r", start)
+            return False
         if isinstance(values, list):
             for i, row_data in enumerate(values):
                 if isinstance(row_data, list):
                     for j, val in enumerate(row_data):
-                        cell = self.ws.cell(
-                            row=openpyxl.utils.cell.coordinate_to_tuple(start)[0] + i,
-                            column=openpyxl.utils.cell.coordinate_to_tuple(start)[1] + j
-                        )
-                        cell.value = val
+                        self.ws.cell(row=start_row + i, column=start_col + j).value = val
                 else:
-                    self.ws.cell(
-                        row=openpyxl.utils.cell.coordinate_to_tuple(start)[0] + i,
-                        column=openpyxl.utils.cell.coordinate_to_tuple(start)[1]
-                    ).value = row_data
+                    self.ws.cell(row=start_row + i, column=start_col).value = row_data
 
     def _do_read_cell(self, p):
         val = self.ws[p["cell"]].value
         logger.info(f"Cell {p['cell']} = {val}")
         return val
+
+    def _do_clear_cell(self, p):
+        self.ws[p["cell"]].value = None
 
     def _do_clear_range(self, p):
         for row in self.ws[p["range"]]:
@@ -172,7 +177,8 @@ class ExcelExecutor:
                 italic=p.get("italic", True),
                 bold=cell.font.bold,
                 size=cell.font.size,
-                name=cell.font.name
+                name=cell.font.name,
+                color=cell.font.color,
             )
 
     def _do_set_underline(self, p):
@@ -184,7 +190,8 @@ class ExcelExecutor:
                     underline=val,
                     bold=cell.font.bold,
                     italic=cell.font.italic,
-                    size=cell.font.size
+                    size=cell.font.size,
+                    color=cell.font.color,
                 )
 
     def _do_set_strikethrough(self, p):
@@ -195,7 +202,8 @@ class ExcelExecutor:
                     strike=True,
                     bold=cell.font.bold,
                     italic=cell.font.italic,
-                    size=cell.font.size
+                    size=cell.font.size,
+                    color=cell.font.color,
                 )
 
     def _do_set_font_size(self, p):
@@ -299,16 +307,24 @@ class ExcelExecutor:
     # â”€â”€ Rows / Columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _do_insert_row(self, p):
-        self.ws.insert_rows(int(p["row"]))
+        row = int(p["row"])
+        amount = max(1, int(p.get("amount") or p.get("count") or 1))
+        self.ws.insert_rows(row, amount)
+        self._shift_tables_for_insert_rows(row, amount)
 
     def _do_insert_column(self, p):
-        self.ws.insert_cols(ord(p["column"].upper()) - 64)
+        from openpyxl.utils import column_index_from_string
+        col = column_index_from_string(str(p["column"]).upper())
+        amount = max(1, int(p.get("amount") or p.get("count") or 1))
+        self.ws.insert_cols(col, amount)
+        self._shift_tables_for_insert_cols(col, amount)
 
     def _do_delete_row(self, p):
         self.ws.delete_rows(int(p["row"]))
 
     def _do_delete_column(self, p):
-        self.ws.delete_cols(ord(p["column"].upper()) - 64)
+        from openpyxl.utils import column_index_from_string
+        self.ws.delete_cols(column_index_from_string(str(p["column"]).upper()))
 
     def _do_set_row_height(self, p):
         self.ws.row_dimensions[int(p["row"])].height = float(p["height"])
@@ -358,7 +374,10 @@ class ExcelExecutor:
     # â”€â”€ Sheet Operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _do_add_sheet(self, p):
-        self.wb.create_sheet(title=p.get("name", "Sheet"))
+        name = str(p.get("name") or "Sheet").strip() or "Sheet"
+        ws = self.wb[name] if name in self.wb.sheetnames else self.wb.create_sheet(title=name)
+        # Treat "add worksheet named X" as selecting X for following actions.
+        self._set_current_sheet(ws)
 
     def _do_delete_sheet(self, p):
         name = p.get("name")
@@ -369,7 +388,9 @@ class ExcelExecutor:
         old_name = p.get("old_name")
         new_name = p.get("new_name", "Sheet")
         if old_name and old_name in self.wb.sheetnames:
-            self.wb[old_name].title = new_name
+            ws = self.wb[old_name]
+            ws.title = new_name
+            self._set_current_sheet(ws)
             return
         # If old name is not provided, rename the active sheet.
         self.ws.title = new_name
@@ -385,7 +406,7 @@ class ExcelExecutor:
         self.wb[p["name"]].sheet_state = "visible"
 
     def _do_set_active_sheet(self, p):
-        self.wb.active = self.wb[p["name"]]
+        self._set_current_sheet(self.wb[p["name"]])
 
     def _do_move_sheet(self, p):
         self.wb.move_sheet(p.get("name"), offset=int(p.get("position", 0)))
@@ -427,7 +448,12 @@ class ExcelExecutor:
     def _do_sort_range(self, p):
         reverse = p.get("order", "ascending") == "descending"
         region  = list(self.ws[p["range"]])
-        region.sort(key=lambda r: r[0].value or "", reverse=reverse)
+        # Capture all values before sorting so we can write back in sorted order.
+        snapshot = [[cell.value for cell in row] for row in region]
+        snapshot.sort(key=lambda r: (r[0] is None, r[0] or ""), reverse=reverse)
+        for row_cells, sorted_values in zip(region, snapshot):
+            for cell, value in zip(row_cells, sorted_values):
+                cell.value = value
 
     def _do_filter_range(self, p):
         self.ws.auto_filter.ref = p["range"]
@@ -456,7 +482,9 @@ class ExcelExecutor:
         logger.info(f"Text to columns with delimiter '{p.get('delimiter')}' (requires win32com)")
 
     def _do_create_named_range(self, p):
-        self.wb.defined_names[p["name"]] = p["range"]
+        from openpyxl.workbook.defined_name import DefinedName
+        attr_text = f"'{self.ws.title}'!{p['range']}"
+        self.wb.defined_names[p["name"]] = DefinedName(name=p["name"], attr_text=attr_text)
 
     def _do_add_conditional_formatting(self, p):
         from openpyxl.formatting.rule import ColorScaleRule
@@ -489,36 +517,81 @@ class ExcelExecutor:
 
     def _do_create_table(self, p):
         from openpyxl.worksheet.table import Table, TableStyleInfo
-        from openpyxl.utils.cell import coordinate_to_tuple
+        from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
 
+        ws = self._sheet_for_action(p)
         start = p.get("start_cell", "A1")
-        rows = max(2, int(p.get("rows", 5)))
+        start_row, start_col = coordinate_to_tuple(start)
+
         explicit_headers = p.get("headers") or []
         if isinstance(explicit_headers, str):
             explicit_headers = [h.strip() for h in explicit_headers.split(",") if h.strip()]
 
-        # If explicit headers are provided, cols derives from them (prefer expanding to truncating).
-        if explicit_headers:
-            cols = max(len(explicit_headers), max(1, int(p.get("cols", len(explicit_headers)))))
-        else:
-            cols = max(1, int(p.get("cols", 3)))
+        used_rows = max(0, ws.max_row - start_row + 1)
+        used_cols = max(0, ws.max_column - start_col + 1)
+        rows = max(2, int(p["rows"])) if p.get("rows") else max(2, used_rows or 5)
 
-        start_row, start_col = coordinate_to_tuple(start)
+        if explicit_headers:
+            cols = max(len(explicit_headers), max(1, int(p["cols"])) if p.get("cols") else used_cols or len(explicit_headers))
+        else:
+            cols = max(1, int(p["cols"])) if p.get("cols") else max(1, used_cols or 3)
+
+        seen_headers = set()
         for i in range(cols):
-            header_cell = self.ws.cell(row=start_row, column=start_col + i)
+            header_cell = ws.cell(row=start_row, column=start_col + i)
             if i < len(explicit_headers):
                 header_cell.value = explicit_headers[i]
             elif header_cell.value is None or str(header_cell.value).strip() == "":
                 # Fall back to generic column name only when no explicit header supplied.
                 header_cell.value = f"Column{i + 1}"
+            header = str(header_cell.value or f"Column{i + 1}").strip() or f"Column{i + 1}"
+            base_header = header
+            suffix = 2
+            while header.lower() in seen_headers:
+                header = f"{base_header}_{suffix}"
+                suffix += 1
+            seen_headers.add(header.lower())
+            header_cell.value = header
 
         end     = self._offset_cell(start, rows - 1, cols - 1)
         ref     = f"{start}:{end}"
-        tbl     = Table(displayName=f"Table{len(self.ws.tables) + 1}", ref=ref)
+
+        new_bounds = range_boundaries(ref)
+        for existing in ws.tables.values():
+            existing_ref = getattr(existing, "ref", "")
+            if not existing_ref:
+                continue
+            if existing_ref.upper() == ref.upper():
+                logger.info("Excel: table already exists for %s on %s; skipping duplicate.", ref, ws.title)
+                return
+            old_bounds = range_boundaries(existing_ref)
+            if not (
+                new_bounds[2] < old_bounds[0] or new_bounds[0] > old_bounds[2]
+                or new_bounds[3] < old_bounds[1] or new_bounds[1] > old_bounds[3]
+            ):
+                raise ValueError(f"Cannot create overlapping Excel table range {ref}; existing table uses {existing_ref}.")
+
+        existing_names = {
+            name.lower()
+            for sheet in self.wb.worksheets
+            for name in sheet.tables.keys()
+        }
+        requested_name = str(p.get("table_name") or p.get("name") or "Table").strip()
+        requested_name = re.sub(r"[^A-Za-z0-9_]", "_", requested_name)
+        if not requested_name or not re.match(r"^[A-Za-z_]", requested_name):
+            requested_name = "Table"
+        idx = 1
+        display_name = f"{requested_name}{idx}"
+        while display_name.lower() in existing_names:
+            idx += 1
+            display_name = f"{requested_name}{idx}"
+
+        tbl     = Table(displayName=display_name, ref=ref)
         tbl.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium9", showRowStripes=True
         )
-        self.ws.add_table(tbl)
+        ws.add_table(tbl)
+        self._set_current_sheet(ws)
 
     def _do_insert_chart(self, p):
         from openpyxl.chart import BarChart, LineChart, PieChart, Reference
@@ -539,7 +612,8 @@ class ExcelExecutor:
         self.ws.row_dimensions.group(int(p["start_row"]), int(p["end_row"]), hidden=False)
 
     def _do_ungroup_rows(self, p):
-        self.ws.row_dimensions.group(int(p["start_row"]), int(p["end_row"]), hidden=False)
+        for row_num in range(int(p["start_row"]), int(p["end_row"]) + 1):
+            self.ws.row_dimensions[row_num].outlineLevel = 0
 
     def _do_insert_image(self, p):
         from openpyxl.drawing.image import Image
@@ -576,14 +650,15 @@ class ExcelExecutor:
         return
 
     def _do_save_workbook(self, p):
-        path = getattr(self.wb, "_path", "output.xlsx")
-        self.wb.save(path)
+        # The office runner owns persistence and locked-file fallback. Treat
+        # explicit save actions as lifecycle markers so they cannot fail early.
+        return
 
     def _do_save_workbook_as(self, p):
-        filename = p.get("filename", "output")
-        if not filename.endswith(".xlsx"):
-            filename += ".xlsx"
-        self.wb.save(filename)
+        # The server resolves the final output path before execution and saves
+        # once at the end. Saving here can corrupt the response path or fail
+        # before the runner can apply its fallback for files open in Excel.
+        return
 
     def _do_close_workbook(self, p):
         logger.info("Workbook closed (session ended)")
@@ -606,3 +681,40 @@ class ExcelExecutor:
             new_col     = chr((new_col_num - 1) % 26 + 65) + new_col
             new_col_num = (new_col_num - 1) // 26
         return f"{new_col}{row + row_offset}"
+
+    def _set_table_ref(self, table, ref):
+        table.ref = ref
+        if getattr(table, "autoFilter", None) is not None:
+            table.autoFilter.ref = ref
+
+    def _shift_tables_for_insert_rows(self, row, amount):
+        from openpyxl.utils import get_column_letter
+        from openpyxl.utils.cell import range_boundaries
+
+        for table in self.ws.tables.values():
+            min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+            if row <= min_row:
+                min_row += amount
+                max_row += amount
+            elif min_row < row <= max_row:
+                max_row += amount
+            else:
+                continue
+            ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+            self._set_table_ref(table, ref)
+
+    def _shift_tables_for_insert_cols(self, col, amount):
+        from openpyxl.utils import get_column_letter
+        from openpyxl.utils.cell import range_boundaries
+
+        for table in self.ws.tables.values():
+            min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+            if col <= min_col:
+                min_col += amount
+                max_col += amount
+            elif min_col < col <= max_col:
+                max_col += amount
+            else:
+                continue
+            ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+            self._set_table_ref(table, ref)

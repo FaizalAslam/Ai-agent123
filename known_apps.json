@@ -6,5 +6,9 @@
   "chrome music": {
     "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "type": "exe"
+  },
+  "the file \"hello\" present at desktop and then put values in it in the column i and row 1 the value 15": {
+    "path": "C:\\Users\\",
+    "type": "exe"
   }
 }

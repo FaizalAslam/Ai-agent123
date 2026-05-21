@@ -317,7 +317,10 @@ class WordExecutor:
         from lxml import etree
         count   = int(p.get("count", 2))
         sect_pr = self.doc.sections[0]._sectPr
-        cols    = etree.SubElement(sect_pr, qn("w:cols"))
+        # Update existing w:cols element rather than appending a duplicate.
+        cols = sect_pr.find(qn("w:cols"))
+        if cols is None:
+            cols = etree.SubElement(sect_pr, qn("w:cols"))
         cols.set(qn("w:num"), str(count))
 
     # â”€â”€ Header / Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

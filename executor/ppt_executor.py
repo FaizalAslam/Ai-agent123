@@ -109,9 +109,18 @@ class PowerPointExecutor:
 
     def _do_delete_slide(self, p):
         idx = self._internal_slide_index(p.get("slide_index"), default=1)
-        if idx < len(self.prs.slides):
-            xml_slides = self.prs.slides._sldIdLst
-            xml_slides.remove(xml_slides[idx])
+        slides = self.prs.slides
+        if idx >= len(slides):
+            return
+        slide = slides[idx]
+        slide_part = slide.part
+        xml_slides = slides._sldIdLst
+        xml_slides.remove(xml_slides[idx])
+        # Drop the relationship so the saved file is not corrupt.
+        try:
+            self.prs.part.drop_rel(slide_part.partname)
+        except Exception:
+            pass
 
     def _do_duplicate_slide(self, p):
         import copy
@@ -134,6 +143,9 @@ class PowerPointExecutor:
         xml_list.remove(item)
         xml_list.insert(to_idx, item)
 
+    def _do_reorder_slides(self, p):
+        self._do_reorder_slide(p)
+
     def _do_hide_slide(self, p):
         self._slide(p)._element.set("show", "0")
 
@@ -144,16 +156,10 @@ class PowerPointExecutor:
         logger.info(f"Navigate to slide {p.get('slide_index')} (requires win32com)")
 
     def _do_change_layout(self, p):
-        layout_map = {
-            "blank":         6,
-            "title_only":    5,
-            "title_content": 1,
-            "two_content":   3,
-        }
-        idx    = layout_map.get(p.get("layout", "title_content"), 1)
-        idx    = min(idx, len(self.prs.slide_layouts) - 1)
-        slide  = self._slide(p)
-        slide.slide_layout = self.prs.slide_layouts[idx]
+        # python-pptx exposes slide_layout as a read-only property; changing the
+        # layout requires manipulating the slide's OPC relationship which is not
+        # supported without win32com or low-level XML surgery.
+        logger.info(f"Change layout to '{p.get('layout')}' (requires win32com for full support)")
 
     # â”€â”€ Text Content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -178,6 +184,18 @@ class PowerPointExecutor:
             para.text  = p.get("text", "")
             para.level = 0
 
+    def _do_append_to_body(self, p):
+        """Legacy-compatible body append used by older Office-agent prompts."""
+        from pptx.util import Inches
+
+        slide = self._slide(p)
+        shape = self._get_shape(slide, "body")
+        if not shape or not getattr(shape, "has_text_frame", False):
+            shape = slide.shapes.add_textbox(Inches(1), Inches(1.7), Inches(8), Inches(4.5))
+        para       = shape.text_frame.add_paragraph()
+        para.text  = p.get("text", "")
+        para.level = int(p.get("level", 0) or 0)
+
     def _do_add_numbered_point(self, p):
         slide = self._slide(p)
         shape = self._get_shape(slide, "body")
@@ -189,6 +207,9 @@ class PowerPointExecutor:
     def _do_set_speaker_notes(self, p):
         slide = self._slide(p)
         slide.notes_slide.notes_text_frame.text = p.get("text", "")
+
+    def _do_add_speaker_notes(self, p):
+        self._do_set_speaker_notes(p)
 
     # â”€â”€ Font & Style â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -305,6 +326,9 @@ class PowerPointExecutor:
     def _do_set_theme(self, p):
         logger.info(f"Theme '{p.get('theme')}' (requires win32com)")
 
+    def _do_apply_theme(self, p):
+        self._do_set_theme(p)
+
     def _do_set_color_scheme(self, p):
         logger.info(f"Color scheme '{p.get('scheme')}' (requires win32com)")
 
@@ -330,6 +354,9 @@ class PowerPointExecutor:
             return
         slide = self._slide(p)
         slide.shapes.add_picture(path, Inches(1), Inches(1), Inches(4), Inches(3))
+
+    def _do_add_image(self, p):
+        self._do_insert_image(p)
 
     def _do_resize_image(self, p):
         logger.info(f"Resize image to {p.get('width')}x{p.get('height')} (use shape index for targeting)")
@@ -364,6 +391,9 @@ class PowerPointExecutor:
             Inches(1), Inches(1), Inches(6), Inches(3)
         )
 
+    def _do_add_table(self, p):
+        self._do_insert_table(p)
+
     def _do_insert_chart(self, p):
         from pptx.util import Inches
         from pptx.chart.data import ChartData
@@ -382,6 +412,23 @@ class PowerPointExecutor:
         chart_data.add_series("Series 1", (1, 2, 3))
         slide = self._slide(p)
         slide.shapes.add_chart(chart_type, Inches(1), Inches(1), Inches(6), Inches(4), chart_data)
+
+    def _do_add_chart(self, p):
+        self._do_insert_chart(p)
+
+    def _do_find_replace_text(self, p):
+        find_text = str(p.get("find_text", ""))
+        replace_text = str(p.get("replace_text", ""))
+        if not find_text:
+            return
+        for slide in self.prs.slides:
+            for shape in slide.shapes:
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if find_text in run.text:
+                            run.text = run.text.replace(find_text, replace_text)
 
     def _do_insert_video(self, p):
         logger.info(f"Video '{p.get('path')}' (requires win32com)")
@@ -474,9 +521,6 @@ class PowerPointExecutor:
         logger.info("Remove animation (requires win32com)")
 
     def _do_set_auto_advance(self, p):
-        from pptx.util import Pt
-        slide = self._slide(p)
-        slide.slide_layout.slide_master.slide_layouts
         logger.info(f"Auto-advance after {p.get('seconds')}s (requires win32com)")
 
     # â”€â”€ Slide Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

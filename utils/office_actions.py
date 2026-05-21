@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 
@@ -35,7 +36,86 @@ class OfficeActionError(ValueError):
         self.action_name = action_name
 
 
+CONTAINER_KEYS = ("actions", "commands", "steps")
+
+
+def _extract_action_container(raw_actions):
+    """Accept legacy action containers without weakening validation."""
+    if isinstance(raw_actions, dict) and "action" not in raw_actions:
+        for key in CONTAINER_KEYS:
+            if key not in raw_actions:
+                continue
+            value = raw_actions.get(key)
+            if isinstance(value, list):
+                logger.warning("Office action parser returned container key '%s'; normalizing to action list.", key)
+                return value
+            raise OfficeActionError(
+                "INVALID_OFFICE_ACTION",
+                f"Office action container '{key}' must be a JSON array.",
+                f"Got {type(value).__name__}.",
+            )
+    return raw_actions
+
+
+def _flatten_legacy_action_shape(item, idx):
+    """Normalize older LLM shapes such as {'action': 'x', 'parameters': {...}}."""
+    if not isinstance(item, dict):
+        raise OfficeActionError(
+            "INVALID_OFFICE_ACTION",
+            f"Office action at index {idx} must be an object.",
+            f"Got {type(item).__name__}.",
+            action_index=idx,
+        )
+
+    cleaned = dict(item)
+    for param_key in ("parameters", "params"):
+        if param_key not in cleaned:
+            continue
+        nested = cleaned.pop(param_key)
+        if nested in (None, ""):
+            continue
+        if not isinstance(nested, dict):
+            raise OfficeActionError(
+                "INVALID_OFFICE_ACTION",
+                f"Office action at index {idx} field '{param_key}' must be an object.",
+                f"Got {type(nested).__name__}.",
+                action_index=idx,
+            )
+        for key, value in nested.items():
+            cleaned.setdefault(key, value)
+
+    raw_action = cleaned.get("action")
+    if isinstance(raw_action, str):
+        action_text = raw_action.strip()
+        if "{" in action_text and action_text.endswith("}"):
+            name, _, json_part = action_text.partition("{")
+            try:
+                embedded = json.loads("{" + json_part)
+            except json.JSONDecodeError as exc:
+                raise OfficeActionError(
+                    "INVALID_OFFICE_ACTION",
+                    f"Office action at index {idx} contains malformed embedded JSON.",
+                    str(exc),
+                    action_index=idx,
+                ) from exc
+            if not isinstance(embedded, dict):
+                raise OfficeActionError(
+                    "INVALID_OFFICE_ACTION",
+                    f"Office action at index {idx} embedded JSON must be an object.",
+                    f"Got {type(embedded).__name__}.",
+                    action_index=idx,
+                )
+            cleaned["action"] = name.strip()
+            for key, value in embedded.items():
+                cleaned.setdefault(key, value)
+        else:
+            cleaned["action"] = action_text
+
+    return cleaned
+
+
 def normalize_actions(raw_actions):
+    raw_actions = _extract_action_container(raw_actions)
     if isinstance(raw_actions, dict):
         logger.warning("Office action parser returned a single object; wrapping it in a list.")
         actions = [raw_actions]
@@ -56,21 +136,14 @@ def normalize_actions(raw_actions):
 
     normalized = []
     for idx, item in enumerate(actions):
-        if not isinstance(item, dict):
-            raise OfficeActionError(
-                "INVALID_OFFICE_ACTION",
-                f"Office action at index {idx} must be an object.",
-                f"Got {type(item).__name__}.",
-                action_index=idx,
-            )
-        action_name = str(item.get("action", "")).strip()
+        cleaned = _flatten_legacy_action_shape(item, idx)
+        action_name = str(cleaned.get("action", "")).strip()
         if not action_name:
             raise OfficeActionError(
                 "INVALID_OFFICE_ACTION",
                 f"Office action at index {idx} is missing required field: action.",
                 action_index=idx,
             )
-        cleaned = dict(item)
         cleaned["action"] = action_name
         normalized.append(cleaned)
 

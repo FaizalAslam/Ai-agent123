@@ -671,6 +671,285 @@
         "name": "Report"
       },
       {
+        "action": "create_table"
+      },
+      {
+        "action": "write_range",
+        "start_cell": "A1",
+        "values": [
+          [
+            "Name",
+            "Amount",
+            "Status"
+          ],
+          [
+            "Sample 1",
+            100,
+            "Active"
+          ],
+          [
+            "Sample 2",
+            200,
+            "Inactive"
+          ],
+          [
+            "Sample 3",
+            150,
+            "Active"
+          ],
+          [
+            "Sample 4",
+            250,
+            "Inactive"
+          ]
+        ]
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1"
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_number_format",
+        "range": "B2:B5",
+        "format": "$#,##0.00"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "set_alignment",
+        "range": "A1:C1"
+      },
+      {
+        "action": "autofit_columns"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "Report.xlsx"
+      }
+    ],
+    "Create a new Excel file, add a worksheet named \"Sheet1\", create a table with 5 rows and 3 columns starting at cell A1, use headers Name, Amount, and Status, make the header row bold, set the header background color to yellow, add simple sample data in the rows below, and apply borders to the full table. Then auto-fit the column widths, align the text neatly, and save the file as \"Test_File.xlsx\"": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Sheet1"
+      },
+      {
+        "action": "write_range",
+        "start_cell": "A1",
+        "values": [
+          [
+            "Name",
+            "Amount",
+            "Status"
+          ],
+          [
+            "John Doe",
+            100,
+            "Active"
+          ],
+          [
+            "Jane Smith",
+            200,
+            "Inactive"
+          ],
+          [
+            "Alice Johnson",
+            150,
+            "Active"
+          ],
+          [
+            "Bob Brown",
+            250,
+            "Inactive"
+          ]
+        ]
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1"
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "autofit_columns"
+      },
+      {
+        "action": "set_alignment",
+        "range": "A1:C5"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "Test_File.xlsx"
+      }
+    ],
+    "can you open the excel file named Test_File": [
+      {
+        "action": "open_workbook",
+        "path": "Test_File"
+      }
+    ],
+    "Create a new Excel workbook from scratch, add a worksheet named \"Transactions\", create a formatted table starting at A1 with columns Date, Description, Amount, Category, and Status using 8 sample rows of financial data like invoices and payments, make headers bold with yellow background and black centered text, format Amount as currency, add borders and alternating row colors to the table, enable the total row showing Sum of Amount. Then create a second worksheet named \"Dashboard\", build a PivotTable connected to the Transactions table with Category in Rows, Sum of Amount in Values, and Date in Filters for last 30 days, refresh it automatically, add a clustered column chart visualizing Amount by Category next to the PivotTable, apply professional formatting with chart title \"Monthly Summary\" and data labels, freeze the top rows on both sheets, protect the Dashboard sheet from edits while keeping pivots live, and save the entire workbook as \"Financial_Tracker.xlsx\" to the Desktop.": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Transactions"
+      },
+      {
+        "action": "write_range",
+        "start_cell": "A1",
+        "values": [
+          [
+            "Date",
+            "Description",
+            "Amount",
+            "Category",
+            "Status"
+          ],
+          [
+            "2023-01-01",
+            "Invoice #001",
+            1500,
+            "Sales",
+            "Paid"
+          ],
+          [
+            "2023-01-05",
+            "Invoice #002",
+            2000,
+            "Sales",
+            "Pending"
+          ],
+          [
+            "2023-01-10",
+            "Payment #001",
+            -500,
+            "Payments",
+            "Completed"
+          ],
+          [
+            "2023-01-15",
+            "Invoice #003",
+            2500,
+            "Sales",
+            "Paid"
+          ],
+          [
+            "2023-01-20",
+            "Invoice #004",
+            3000,
+            "Sales",
+            "Pending"
+          ],
+          [
+            "2023-01-25",
+            "Payment #002",
+            -1000,
+            "Payments",
+            "Completed"
+          ],
+          [
+            "2023-01-30",
+            "Invoice #005",
+            3500,
+            "Sales",
+            "Pending"
+          ]
+        ]
+      },
+      {
+        "action": "create_table"
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:E1"
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:E1",
+        "color": "yellow"
+      },
+      {
+        "action": "set_font_color",
+        "range": "A1:E1",
+        "color": "black"
+      },
+      {
+        "action": "set_vertical_alignment",
+        "range": "A1:E1"
+      },
+      {
+        "action": "set_number_format",
+        "range": "C2:C8",
+        "format": "$#,##0.00"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:E8"
+      },
+      {
+        "action": "set_row_height",
+        "row": 1,
+        "height": 20
+      },
+      {
+        "action": "set_wrap_text",
+        "range": "A1:E1"
+      },
+      {
+        "action": "add_sheet",
+        "name": "Dashboard"
+      },
+      {
+        "action": "set_active_sheet",
+        "name": "Transactions"
+      },
+      {
+        "action": "freeze_panes",
+        "cell": "A2"
+      },
+      {
+        "action": "set_active_sheet",
+        "name": "Dashboard"
+      },
+      {
+        "action": "freeze_panes",
+        "cell": "A2"
+      },
+      {
+        "action": "protect_sheet"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "Financial_Tracker.xlsx"
+      }
+    ],
+    "Create a new Excel workbook from scratch, add a worksheet named \"DataEntry\", create a table starting at A1 with columns Date, Item, Amount, and Category using 6 sample rows of expense data, make headers bold with yellow background, format Amount as currency, add borders to the table, enable filters and a totals row showing Sum of Amount. Then add a second sheet \"Summary\" with a simple PivotTable from the DataEntry table showing Category in Rows and Sum of Amount in Values, place a basic bar chart next to it showing Amount by Category, auto-fit columns on both sheets, and save as \"Expense_Tracker.xlsx\"": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "DataEntry"
+      },
+      {
         "action": "create_table",
         "rows": 5,
         "cols": 3,
@@ -687,19 +966,245 @@
         "color": "yellow"
       },
       {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
         "action": "set_border",
-        "range": "A1:C1"
+        "range": "A1:C5"
       },
       {
-        "action": "set_alignment",
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "autofit_columns",
+        "range": "A:C"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "expense_tracker.xlsx"
+      }
+    ],
+    "Rename the existing default sheet to \"DataEntry\" without adding any new sheets, then create a table starting at A1 with columns Date, Item, Amount, and Category using 6 sample rows of expense data, make headers bold with yellow background, format Amount as currency, add borders to the table, enable filters and a totals row showing Sum of Amount. Then add a PivotTable on the same sheet starting at F1 showing Category in Rows and Sum of Amount in Values, place a basic bar chart next to it at J1 showing Amount by Category, auto-fit columns, and save as \"Expense_Tracker.xlsx\".": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_bold",
         "range": "A1:C1",
-        "alignment": "center"
+        "bold": true
       },
       {
-        "action": "autofit_columns"
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "F1"
+      },
+      {
+        "action": "autofit_columns",
+        "range": "J1"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "expense_tracker.xlsx"
+      }
+    ],
+    "Create a new Excel workbook from scratch, add a worksheet named \"DataEntry\", create a table starting at A1 with columns Date, Item, Amount, and Category using 6 sample rows of expense data, make headers bold with yellow background, format Amount as currency, add borders to the table, enable filters and a totals row showing Sum of Amount. Then add a second sheet \"Summary\" with a simple PivotTable from the DataEntry table showing Category in Rows and Sum of Amount in Values, place a basic bar chart next to it showing Amount by Category, auto-fit columns on both sheets, and save as \"Expense_Tracker.xlsx\".": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "add_sheet",
+        "name": "DataEntry"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_bold",
+        "range": "A1:C1",
+        "bold": true
+      },
+      {
+        "action": "set_bg_color",
+        "range": "A1:C1",
+        "color": "yellow"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "set_border",
+        "range": "A1:C5"
+      },
+      {
+        "action": "create_table",
+        "rows": 5,
+        "cols": 3,
+        "start_cell": "A1"
+      },
+      {
+        "action": "autofit_columns",
+        "range": "A:C"
+      },
+      {
+        "action": "save_workbook_as",
+        "filename": "expense_tracker.xlsx"
+      }
+    ],
+    "open the file Expense_Tracker.xlsx": [
+      {
+        "action": "open_workbook",
+        "path": "Expense_Tracker.xlsx"
+      }
+    ],
+    "open the file Expense_Tracker.xlsx and fill the 2,3,4,5,6, from G1": [
+      {
+        "action": "open_workbook",
+        "path": "Expense_Tracker.xlsx"
+      },
+      {
+        "action": "write_range",
+        "start_cell": "G1",
+        "values": [
+          [
+            2
+          ],
+          [
+            3
+          ],
+          [
+            4
+          ],
+          [
+            5
+          ],
+          [
+            6
+          ]
+        ]
+      }
+    ],
+    "create an excel file named \"Hello\" and save it on Desktop": [
+      {
+        "action": "create_workbook"
       },
       {
         "action": "save_workbook"
+      }
+    ],
+    "Open the Excel file \u201cBudget2026\u201d from the Documents folder and enter the value 2500 into cell B4, then open the spreadsheet \u201cSales_Report\u201d located on the Desktop and write \u201cCompleted\u201d in cell F12. After that, launch the workbook \u201cInventory_List\u201d from Downloads and place the number 87 into row 3, column D. Next, open the file \u201cStudentScores\u201d from the Desktop and insert the value 92 into cell H7, then access the spreadsheet \u201cProjectData\u201d on the Desktop and type \u201cApproved\u201d into cell C9. Finally, open the workbook \u201cExpenses_March\u201d from Documents and enter the value 1450.75 into row 10, column G.": [
+      {
+        "action": "open_workbook",
+        "path": "Documents/Budget2026.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "B4",
+        "value": 2500
+      },
+      {
+        "action": "open_workbook",
+        "path": "Desktop/Sales_Report.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "F12",
+        "value": "Completed"
+      },
+      {
+        "action": "open_workbook",
+        "path": "Downloads/Inventory_List.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "D3",
+        "value": 87
+      },
+      {
+        "action": "open_workbook",
+        "path": "Desktop/StudentScores.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "H7",
+        "value": 92
+      },
+      {
+        "action": "open_workbook",
+        "path": "Desktop/ProjectData.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "C9",
+        "value": "Approved"
+      },
+      {
+        "action": "open_workbook",
+        "path": "Documents/Expenses_March.xlsx"
+      },
+      {
+        "action": "write_cell",
+        "cell": "G10",
+        "value": 1450.75
+      }
+    ],
+    "Create a new Excel workbook named \u201cEmployeePerformance\u201d on the Desktop, add a worksheet titled \u201cQ1 Review\u201d, and enter the following headers in the first row: \u201cEmployee Name\u201d in cell A1, \u201cDepartment\u201d in cell B1, \u201cPerformance Score\u201d in cell C1, and \u201cStatus\u201d in cell D1. Then add the following data: \u201cJohn Carter\u201d in A2, \u201cSales\u201d in B2, 88 in C2, and \u201cPromoted\u201d in D2; \u201cEmily Stone\u201d in A3, \u201cMarketing\u201d in B3, 91 in C3, and \u201cExcellent\u201d in D3; and \u201cDavid Lee\u201d in A4, \u201cOperations\u201d in B4, 76 in C4, and \u201cNeeds Review\u201d in D4. After entering all values, save the workbook and close it.": [
+      {
+        "action": "create_workbook"
+      },
+      {
+        "action": "write_cell",
+        "cell": "A1",
+        "value": "Employee Name"
+      },
+      {
+        "action": "write_formula",
+        "cell": "D3",
+        "formula": "=LEN(D3)"
+      },
+      {
+        "action": "save_workbook"
+      }
+    ],
+    "create a new file": [
+      {
+        "action": "create_workbook"
       }
     ]
   },
@@ -780,10 +1285,275 @@
         "rows": 3,
         "cols": 3
       }
+    ],
+    "Create a word file and save it as Title and add the title as CHECK with font size 76": [
+      {
+        "action": "create_document"
+      },
+      {
+        "action": "save_document_as",
+        "filename": "Title.docx"
+      },
+      {
+        "action": "set_font_size",
+        "target": "selection",
+        "size": 76
+      }
+    ],
+    "Create a word file and save it as \"Title2\" and add the title as CHECK with font size 76": [
+      {
+        "action": "create_document"
+      },
+      {
+        "action": "save_document_as",
+        "filename": "Title2.docx"
+      },
+      {
+        "action": "set_font_size",
+        "target": "selection",
+        "size": 76
+      }
+    ],
+    "create a word file": [
+      {
+        "action": "create_document"
+      }
+    ],
+    "change text colour to red": [
+      {
+        "action": "set_font_color",
+        "target": "selection",
+        "color": "FF0000"
+      }
+    ],
+    "create new word file": [
+      {
+        "action": "create_document"
+      }
+    ],
+    "save file": [
+      {
+        "action": "save_document"
+      }
+    ],
+    "create new word document": [
+      {
+        "action": "create_document"
+      }
+    ],
+    "write in document \"hello\"": [
+      {
+        "action": "add_paragraph",
+        "text": "hello"
+      }
+    ],
+    "open document \"word_test.docx\"": [
+      {
+        "action": "open_document",
+        "path": "word_test.docx"
+      }
+    ],
+    "write text \"this is hello\"": [
+      {
+        "action": "add_paragraph",
+        "text": "this is hello"
+      }
+    ],
+    "create a new document and add heading level 1 with text \"Test Heading\" and save as heading_test.docx": [
+      {
+        "action": "create_document"
+      },
+      {
+        "action": "add_heading",
+        "text": "Test Heading",
+        "level": 1
+      },
+      {
+        "action": "save_document_as",
+        "filename": "heading_test.docx"
+      }
+    ],
+    "create a new document and add heading level 1 with text \"Test Heading\" and save document as \"heading_test.docx\"": [
+      {
+        "action": "create_document"
+      },
+      {
+        "action": "add_heading",
+        "text": "Test Heading",
+        "level": 1
+      },
+      {
+        "action": "save_document_as",
+        "filename": "heading_test.docx"
+      }
+    ],
+    "open document \"heading_test.docx\" and write text \"Hello world\" and bold the text and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "add_paragraph",
+        "text": "Hello world"
+      },
+      {
+        "action": "set_bold",
+        "target": "selection",
+        "bold": true
+      },
+      {
+        "action": "save_document"
+      }
+    ],
+    "open document \"heading_test.docx\" and italic the text and underline the text and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "set_italic",
+        "target": "selection",
+        "italic": true
+      },
+      {
+        "action": "set_underline",
+        "target": "selection",
+        "underline": true
+      },
+      {
+        "action": "save_document"
+      }
+    ],
+    "open document \"heading_test.docx\" and change text color to blue and highlight the text yellow and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "set_font_color",
+        "target": "selection",
+        "color": "0070C0"
+      },
+      {
+        "action": "set_highlight",
+        "target": "selection",
+        "color": "FFFF00"
+      },
+      {
+        "action": "save_document"
+      }
+    ],
+    "open document \"heading_test.docx\" and add a table with 3 rows and 3 columns and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "add_table",
+        "rows": 3,
+        "cols": 3
+      },
+      {
+        "action": "save_document"
+      }
+    ],
+    "open document \"heading_test.docx\" and add bullets \"apples\", \"bananas\", \"grapes\"": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "add_bullet_list",
+        "items": [
+          "apples",
+          "bananas",
+          "grapes"
+        ]
+      }
+    ],
+    "open document \"heading_test.docx\" and set alignment center and set line spacing 1.5 and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "set_alignment",
+        "target": "selection",
+        "alignment": "center"
+      },
+      {
+        "action": "set_line_spacing",
+        "target": "selection",
+        "spacing": 1.5
+      },
+      {
+        "action": "save_document"
+      }
+    ],
+    "open document \"heading_test.docx\" and replace \"Hello world\" with \"Edited text\" and save document": [
+      {
+        "action": "open_document",
+        "path": "heading_test.docx"
+      },
+      {
+        "action": "find_replace",
+        "find_text": "hello world",
+        "replace_text": "edited text"
+      },
+      {
+        "action": "save_document"
+      }
     ]
   },
   "powerpoint": {
     "create a new presentation": [
+      {
+        "action": "create_presentation"
+      }
+    ],
+    "create a powerpoint file": [
+      {
+        "action": "create_presentation"
+      }
+    ],
+    "create a powerpoint file and add a title \"DEMO\"": [
+      {
+        "action": "create_presentation"
+      },
+      {
+        "action": "set_slide_text",
+        "target": "title",
+        "text": "DEMO",
+        "slide_index": 1
+      }
+    ],
+    "create a powerpoint file and add a title \"DEMO1\"": [
+      {
+        "action": "create_presentation"
+      },
+      {
+        "action": "set_slide_text",
+        "target": "title",
+        "text": "DEMO1",
+        "slide_index": 1
+      }
+    ],
+    "save file": [
+      {
+        "action": "save_presentation"
+      }
+    ],
+    "create a PowerPoint presentation about sales": [
+      {
+        "action": "create_presentation"
+      }
+    ],
+    "Generate a powerpoint on the topic of global warminh": [
+      {
+        "action": "create_presentation"
+      }
+    ],
+    "generate a powerpoint presentation on \"global warming\"": [
       {
         "action": "create_presentation"
       }

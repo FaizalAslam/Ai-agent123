@@ -86,6 +86,23 @@ export function PdfEditor({ onToast }: PdfEditorProps) {
     }
   }
 
+  async function loadPdfAtPath(path: string) {
+    const result = await apiPost<BackendResponse>("/editor/open", { file_path: path }, 90000);
+    if (result.ok && result.data) {
+      const nextPath = typeof result.data.file_path === "string" ? result.data.file_path : path;
+      const nextPages = Array.isArray(result.data.pages) ? result.data.pages : [];
+      setFilePath(nextPath);
+      setPages(nextPages);
+      setCurrentPage(0);
+      setSelected(null);
+      setMessage(result.message || `Loaded saved PDF: ${nextPath}`);
+      await renderPage(nextPath, 0, nextPages);
+      return true;
+    }
+    onToast({ tone: "error", message: result.message });
+    return false;
+  }
+
   async function renderPage(path = filePath, pageNum = currentPage, knownPages = pages) {
     if (!path) return;
     setLoading("/editor/render-page");
@@ -150,9 +167,16 @@ export function PdfEditor({ onToast }: PdfEditorProps) {
     setLoading("/editor/save");
     try {
       const result = await apiPost<BackendResponse>("/editor/save", { file_path: filePath, edits }, 120000);
+      const savedPath =
+        typeof result.data?.output_path === "string"
+          ? result.data.output_path
+          : typeof result.data?.file_path === "string"
+            ? result.data.file_path
+            : filePath;
       if (result.ok) {
         setEdits([]);
-        await renderPage(filePath, currentPage);
+        setFilePath(savedPath);
+        await loadPdfAtPath(savedPath);
       }
       setMessage(result.message);
       addHistoryRecord({
@@ -161,7 +185,7 @@ export function PdfEditor({ onToast }: PdfEditorProps) {
         status: result.ok ? "success" : "error",
         route: "/editor/save",
         message: result.message,
-        filePath
+        filePath: savedPath
       });
       onToast({ tone: result.ok ? "success" : "error", message: result.message });
     } finally {

@@ -134,6 +134,68 @@ def _extension_candidates(path, app_type):
     return [path.with_suffix(f".{ext}") for ext in OFFICE_EXTENSION_CANDIDATES.get(app, (OFFICE_EXTENSIONS.get(app, ""),)) if ext]
 
 
+def extract_office_filename_hint(command_text, app_type):
+    """Extract a raw Office filename/path hint from an open-file command."""
+    text = str(command_text or "").strip()
+    if not text:
+        return ""
+    app = canonical_office_app(app_type)
+    extensions = OFFICE_EXTENSION_CANDIDATES.get(app, (OFFICE_EXTENSIONS.get(app, ""),))
+    ext_group = "|".join(re.escape(ext) for ext in extensions if ext)
+
+    if ext_group:
+        quoted = re.search(rf"['\"]([^'\"]+\.({ext_group}))['\"]", text, re.IGNORECASE)
+        if quoted:
+            return quoted.group(1).strip()
+        absolute = re.search(rf"([A-Za-z]:[\\/][^\"'\n]+?\.({ext_group}))", text, re.IGNORECASE)
+        if absolute:
+            return absolute.group(1).strip()
+        plain = re.search(rf"\b([A-Za-z0-9_\- .]+\.({ext_group}))\b", text, re.IGNORECASE)
+        if plain:
+            return _clean_filename_hint(plain.group(1))
+
+    named_patterns = (
+        r"\b(?:named|called)\s+['\"]?([A-Za-z0-9_\- .]{1,160})['\"]?",
+        r"\b(?:file|document|workbook|presentation)\s+(?:named|called)?\s*['\"]?([A-Za-z0-9_\- .]{1,160})['\"]?",
+        r"\bopen\b.+?\b([A-Za-z0-9_\-]{1,120})\b(?:\s+(?:on|from|in|at)\s+(?:desktop|documents|downloads))",
+    )
+    for pattern in named_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            hint = _clean_filename_hint(match.group(1))
+            if hint:
+                return hint
+    return ""
+
+
+def _clean_filename_hint(value):
+    hint = str(value or "").strip().strip("\"'")
+    hint = re.split(
+        r"\s+(?:and|then|with|in|on|from|at|to|into)\b",
+        hint,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return hint.strip(" .")
+
+
+def _case_insensitive_existing(candidate):
+    candidate = Path(candidate)
+    if candidate.exists():
+        return candidate
+    parent = candidate.parent
+    try:
+        if not parent.exists():
+            return None
+        target_name = candidate.name.lower()
+        for child in parent.iterdir():
+            if child.name.lower() == target_name:
+                return child
+    except OSError:
+        return None
+    return None
+
+
 def candidate_input_paths(value, app_type, base_dir=None, command_text=""):
     raw = str(value or "").strip().strip("\"'")
     if not raw:
@@ -170,10 +232,14 @@ def candidate_input_paths(value, app_type, base_dir=None, command_text=""):
 
 
 def resolve_existing_office_path(value, app_type, base_dir=None, command_text=""):
-    attempted = candidate_input_paths(value, app_type, base_dir=base_dir, command_text=command_text)
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        raw_value = extract_office_filename_hint(command_text, app_type)
+    attempted = candidate_input_paths(raw_value, app_type, base_dir=base_dir, command_text=command_text)
     for candidate in attempted:
-        if candidate.exists():
-            return candidate.resolve()
+        existing = _case_insensitive_existing(candidate)
+        if existing:
+            return existing.resolve()
     details = "; ".join(str(path) for path in attempted[:12])
     raise FilePathError(
         "FILE_NOT_FOUND",

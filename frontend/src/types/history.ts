@@ -1,5 +1,5 @@
 export type HistoryType = "office" | "pdf" | "ocr" | "app" | "reader" | "editor" | "system";
-export type HistoryStatus = "success" | "error";
+export type HistoryStatus = "success" | "error" | "partial";
 
 export interface HistoryRecord {
   id: string;

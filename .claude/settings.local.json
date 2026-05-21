@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python smoke_test_office_routes.py)"
+      "Bash(python smoke_test_office_routes.py)",
+      "mcp__plugin_claude-mem_mcp-search__search",
+      "Bash(python -c \"import server; print\\('import OK'\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\faiza\\\\Desktop\\\\Personal_Projects\\\\AI-AGENT-main\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(ConvertTo-Json)"
     ]
   }
 }

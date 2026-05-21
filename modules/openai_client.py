@@ -2,8 +2,15 @@
 import re
 import platform
 import logging
-from openai import OpenAI
 from . import config
+
+try:
+    from openai import OpenAI
+except Exception as exc:  # Handles missing/broken optional OpenAI SDK installs.
+    OpenAI = None
+    _OPENAI_IMPORT_ERROR = exc
+else:
+    _OPENAI_IMPORT_ERROR = None
 
 logger = logging.getLogger("OfficeAgent")
 _client = None
@@ -11,12 +18,17 @@ _client = None
 
 def _get_client():
     global _client
+    if OpenAI is None:
+        raise RuntimeError(f"OpenAI SDK unavailable: {_OPENAI_IMPORT_ERROR}")
     if _client is None:
         _client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=10)
     return _client
 
 
 def guess_path_with_ai(app_name):
+    if OpenAI is None:
+        logger.info("OpenAI app-path fallback skipped: SDK unavailable.")
+        return None
     if not config.OPENAI_API_KEY:
         logger.info("OpenAI app-path fallback skipped: API key missing.")
         return None
@@ -64,6 +76,8 @@ def guess_path_with_ai(app_name):
 
 
 def clean_text_for_reading(raw_text, page_num=None, is_ocr=False):
+    if OpenAI is None:
+        return raw_text
     if not config.OPENAI_API_KEY:
         return raw_text
     if not raw_text or len(raw_text.strip()) < 10:

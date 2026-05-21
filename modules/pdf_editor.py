@@ -26,6 +26,45 @@ except:
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PDF_EDITOR_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "pdf" / "editor"
+
+
+def _next_available_path(path):
+    candidate = Path(path)
+    if not candidate.suffix:
+        candidate = candidate.with_suffix(".pdf")
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    if not candidate.exists():
+        return candidate
+    idx = 1
+    while True:
+        next_path = candidate.with_name(f"{candidate.stem}_{idx}{candidate.suffix}")
+        if not next_path.exists():
+            return next_path
+        idx += 1
+
+
+def _safe_pdf_font(font_name):
+    font = str(font_name or "").strip().lower()
+    builtin = {
+        "helv", "helvetica", "tiro", "times-roman", "cour", "courier",
+        "symbol", "zapfdingbats",
+    }
+    if font in builtin:
+        return "helv" if font == "helvetica" else font
+    return "helv"
+
+
+def _safe_color_tuple(value):
+    color_hex = str(value or "#000000").strip().lstrip("#")
+    if len(color_hex) != 6:
+        color_hex = "000000"
+    try:
+        return tuple(int(color_hex[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except Exception:
+        return (0, 0, 0)
+
 
 def open_pdf(path):
     if not PYMUPDF_AVAILABLE:
@@ -105,41 +144,77 @@ def render_page(path, page_num, zoom=2.0):
 def save_with_edits(path, edits):
     if not PYMUPDF_AVAILABLE:
         return None, "PyMuPDF not installed"
+    if not os.path.exists(path):
+        return None, f"File not found: {path}"
+    if not edits:
+        return None, "No edits were provided."
+
+    doc = None
     try:
         doc = fitz.open(path)
+
+        # Group edits by page index so redactions are applied once per page.
+        from collections import defaultdict
+        edits_by_page = defaultdict(list)
         for edit in edits:
-            page      = doc[edit["page"]]
-            bbox      = fitz.Rect(
-                edit["bbox"]["x"],  edit["bbox"]["y"],
-                edit["bbox"]["x1"], edit["bbox"]["y1"]
-            )
-            page.add_redact_annot(bbox)
+            page_index = int(edit.get("page", 0))
+            if page_index < 0 or page_index >= len(doc):
+                raise ValueError(f"Invalid page index: {page_index}")
+            edits_by_page[page_index].append(edit)
+
+        for page_index, page_edits in sorted(edits_by_page.items()):
+            page = doc[page_index]
+            # Validate bboxes and add all redaction annotations for this page first.
+            pending = []
+            for edit in page_edits:
+                bbox_data = edit.get("bbox") or {}
+                bbox = fitz.Rect(
+                    float(bbox_data["x"]),  float(bbox_data["y"]),
+                    float(bbox_data["x1"]), float(bbox_data["y1"])
+                )
+                if bbox.is_empty or bbox.is_infinite:
+                    raise ValueError("Invalid edit bounding box.")
+                page.add_redact_annot(bbox)
+                pending.append((bbox, edit))
+            # Apply all redactions for this page in one call.
             page.apply_redactions()
+            # Now insert replacement text for each edit.
+            for bbox, edit in pending:
+                style     = edit.get("style", {})
+                font_name = _safe_pdf_font(style.get("font", "helv"))
+                font_size = max(1.0, float(style.get("size", 12) or 12))
+                color     = _safe_color_tuple(style.get("color", "#000000"))
+                page.insert_text(
+                    fitz.Point(bbox.x0, bbox.y1),
+                    str(edit.get("new_text", "")),
+                    fontname=font_name,
+                    fontsize=font_size,
+                    color=color,
+                )
 
-            style     = edit.get("style", {})
-            font_name = style.get("font", "helv")
-            font_size = float(style.get("size", 12))
-            color_hex = style.get("color", "#000000").lstrip("#")
-            r = int(color_hex[0:2], 16) / 255
-            g = int(color_hex[2:4], 16) / 255
-            b = int(color_hex[4:6], 16) / 255
-
-            page.insert_text(
-                fitz.Point(bbox.x0, bbox.y1),
-                edit["new_text"],
-                fontname=font_name,
-                fontsize=font_size,
-                color=(r, g, b),
-            )
-
-        out_dir  = os.path.dirname(path)
-        stem     = Path(path).stem
-        out_path = os.path.join(out_dir, f"{stem}_edited.pdf")
-        doc.save(out_path)
-        doc.close()
-        return out_path, None
+        source = Path(path)
+        preferred = source.with_name(f"{source.stem}_edited.pdf")
+        out_path = _next_available_path(preferred)
+        try:
+            doc.save(str(out_path), garbage=4, deflate=True)
+        except Exception as first_error:
+            fallback = _next_available_path(PDF_EDITOR_OUTPUT_DIR / f"{source.stem}_edited.pdf")
+            try:
+                doc.save(str(fallback), garbage=4, deflate=True)
+                out_path = fallback
+            except Exception:
+                raise first_error
+        if not out_path.exists():
+            return None, f"Save failed; output file was not created: {out_path}"
+        return str(out_path.resolve()), None
     except Exception as e:
         return None, str(e)
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
 
 def detect_form_fields(pdf_path):
@@ -176,8 +251,9 @@ def fill_form(pdf_path, form_data):
         from modules import pdf_utils
         reader = PdfReader(pdf_path)
         writer = PdfWriter()
-        writer.append(pages_from=reader)
-        writer.update_page_form_field_values(writer.pages[0], form_data)
+        writer.append(reader)
+        for page in writer.pages:
+            writer.update_page_form_field_values(page, form_data)
         out_path = pdf_utils.ask(
             kind="savefile",
             defaultname="filled_form.pdf",
@@ -228,4 +304,5 @@ def save_edited_pdf(path, edits):
         "status": "success",
         "message": f"Saved edited PDF: {out_path}",
         "output_path": out_path,
+        "file_path": out_path,
     }

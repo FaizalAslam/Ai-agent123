@@ -37,19 +37,21 @@ OPENAI_API_KEY=your_key_here
 python server.py
 ```
 
-The legacy Flask UI opens at `http://127.0.0.1:5000`.
+The Flask process is API-only at `http://127.0.0.1:5000`. It starts the Next.js frontend if needed and opens `http://127.0.0.1:3000` by default.
 
 ## New React Frontend
 
 The professional light-themed UI lives in `frontend/` and talks to Flask through a Next.js rewrite proxy.
 
-1. Keep the Flask backend running:
+1. Start the app:
 
 ```bash
 python server.py
 ```
 
-2. In a second terminal, start the Next.js frontend:
+2. Open the Next.js URL, normally `http://127.0.0.1:3000`.
+
+If automatic frontend startup fails, start it manually in a second terminal:
 
 ```bash
 cd frontend
@@ -57,9 +59,7 @@ npm install
 npm run dev
 ```
 
-3. Open the Next.js URL shown in the terminal, normally `http://localhost:3000`.
-
-The backend must remain running at `http://127.0.0.1:5000`. To override that, create `frontend/.env.local` from `frontend/.env.local.example`.
+The backend must remain running at `http://127.0.0.1:5000`. To override the frontend URL that `server.py` opens, set `AI_AGENT_FRONTEND_URL`. To override the backend URL used by Next.js, create `frontend/.env.local` from `frontend/.env.local.example`.
 
 ## Office Automation
 

@@ -558,7 +558,10 @@ def _planner_excel_actions(clause, ctx):
 
     if "save" in low and not any(w in low for w in ("save as", "saved as")):
         ctx.last_save_path = ctx.last_save_path or ctx.current_workbook
-        return [_save_action("excel")]
+        _save_acts = [_save_action("excel")]
+        if re.search(r"\bclose\b", low):
+            _save_acts.append({"action": "close_workbook"})
+        return _save_acts
 
     if "concatenate" in low:
         cells = re.findall(r"\b[A-Z]{1,3}\d{1,7}\b", clause.upper())
@@ -656,23 +659,37 @@ def _planner_excel_actions(clause, ctx):
         ctx.last_range = ctx.last_table_range
         ctx.used_range = ctx.last_table_range
 
+    add_sheet_m = re.search(
+        r"\b(?:add|create|insert)\s+(?:a\s+)?(?:worksheet|sheet)\s+(?:named|titled|called)\s+['\"]?([A-Za-z0-9 _\-]+?)['\"]?(?=\s*[,;.]|\s*$|\s+and\b)",
+        clause, re.IGNORECASE,
+    )
+    if add_sheet_m:
+        sheet_name = add_sheet_m.group(1).strip().strip("\"'")
+        actions.append({"action": "add_sheet", "name": sheet_name})
+        ctx.current_sheet = sheet_name
+
     rename = re.search(r"rename\s+(?:the\s+)?sheet\s+(?:to|as)\s+(.+)$", clause, re.IGNORECASE)
     if rename:
         name = rename.group(1).strip().strip("\"'")
         actions.append({"action": "rename_sheet", "new_name": name})
 
-    write_match = re.search(
+    _cell_writes = {}
+    for _m in re.finditer(
         r"\b(?:write|put|enter|type)\s+(.+?)\s+(?:in|into|at|to)\s+(?:cell\s*)?([A-Z]{1,3}\d{1,7})\b",
-        clause,
-        re.IGNORECASE,
-    )
-    if write_match and "[" not in write_match.group(1):
-        value = _parse_literal_value(write_match.group(1))
-        cell = write_match.group(2).upper()
-        actions.append({"action": "write_cell", "cell": cell, "value": value})
-        ctx.last_cell = cell
-        ctx.last_range = cell
-        ctx.used_range = cell
+        clause, re.IGNORECASE,
+    ):
+        if "[" not in _m.group(1):
+            _cell_writes[_m.group(2).upper()] = _parse_literal_value(_m.group(1))
+    for _m in re.finditer(r'"([^"]+)"\s+in\s+(?:cell\s*)?([A-Z]{1,3}\d{1,7})\b', clause, re.IGNORECASE):
+        _cell_writes[_m.group(2).upper()] = _parse_literal_value(_m.group(1))
+    for _m in re.finditer(r'(?<!["\w])(\d+(?:\.\d+)?)\s+in\s+(?:cell\s*)?([A-Z]{1,3}\d{1,7})\b', clause, re.IGNORECASE):
+        if _m.group(2).upper() not in _cell_writes:
+            _cell_writes[_m.group(2).upper()] = _parse_literal_value(_m.group(1))
+    for _cell, _value in _cell_writes.items():
+        actions.append({"action": "write_cell", "cell": _cell, "value": _value})
+        ctx.last_cell = _cell
+        ctx.last_range = _cell
+        ctx.used_range = _cell
 
     formula = re.search(
         r"(?:formula\s+in|write\s+formula\s+in)\s+(?:cell\s*)?([A-Z]{1,3}\d{1,7}).*?(?:total|sum).*?(?:from|of)\s+([A-Z]{1,3}\d{1,7})\s*(?:to|-)\s*([A-Z]{1,3}\d{1,7})",

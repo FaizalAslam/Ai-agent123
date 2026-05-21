@@ -25,7 +25,7 @@ logger = logging.getLogger("OfficeAgent")
 
 MAX_OPENAI_COMMAND_LENGTH = 4000
 OPENAI_TIMEOUT_SECONDS = 20
-OPENAI_MAX_TOKENS = 900
+OPENAI_MAX_TOKENS = 2000
 OPENAI_RETRY_DELAYS = (0.5, 1.5)
 
 SYSTEM_PROMPT = """
@@ -128,9 +128,14 @@ class OpenAIHandler:
             if isinstance(parsed, list):
                 return parsed, "", {}
             if isinstance(parsed, dict):
-                if "actions" in parsed:
+                action_container = next(
+                    (key for key in ("actions", "commands", "steps") if key in parsed),
+                    "",
+                )
+                if action_container:
                     # New structured format: {"actions": [...], "output_filename": ..., ...}
-                    actions = parsed.get("actions") or []
+                    # Legacy compatibility: some older prompts used "commands" or "steps".
+                    actions = parsed.get(action_container) or []
                     if not isinstance(actions, list):
                         actions = []
                     output_filename = str(parsed.get("output_filename") or "").strip()
@@ -233,6 +238,13 @@ class OpenAIHandler:
                     temperature=0,
                     max_tokens=OPENAI_MAX_TOKENS,
                 )
+                if not response.choices:
+                    return self._error_result(
+                        "OPENAI_EMPTY_RESPONSE",
+                        "OpenAI returned no choices.",
+                        start=start,
+                        usage=self._usage_dict(getattr(response, "usage", None)),
+                    )
                 content = (response.choices[0].message.content or "").strip()
                 preview = content[:300]
                 parsed_actions, warnings, output_filename, ai_context = self._parse_json(content)

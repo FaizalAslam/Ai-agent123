@@ -11,6 +11,7 @@ export interface BackendResponse {
   app_type?: string;
   action_type?: string;
   file_path?: string;
+  output_path?: string;
   output_file?: string;
   persisted?: boolean;
   opened?: boolean;
